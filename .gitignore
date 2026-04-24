@@ -1,0 +1,9 @@
+node_modules/
+.env
+data/*
+tts-cache/
+*.aiff
+*.p8
+.omx/
+dist/
+.claude/

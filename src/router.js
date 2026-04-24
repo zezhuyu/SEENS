@@ -1,0 +1,132 @@
+import { generate, getActiveAgent } from './ai/index.js';
+import { buildSystemPrompt } from './context.js';
+import { synthesize } from './tts.js';
+import { addMessage, enqueue, enqueueNext } from './state.js';
+import { broadcast } from './ws-broadcast.js';
+import { resolveTracksOrdered } from '../music/resolver.js';
+import { prewarmCache } from '../routes/stream-audio.js';
+
+// Simple command patterns that don't need AI
+const DIRECT_COMMANDS = [
+  { pattern: /^(next|skip)$/i, action: 'next' },
+  { pattern: /^(pause|stop)$/i, action: 'pause' },
+  { pattern: /^(resume|play)$/i, action: 'resume' },
+];
+
+export async function handleInput(input, triggerType = 'user-chat') {
+  const trimmed = input.trim();
+
+  // Direct command — no AI needed
+  for (const cmd of DIRECT_COMMANDS) {
+    if (cmd.pattern.test(trimmed)) {
+      broadcast('command', { action: cmd.action });
+      return { action: cmd.action, say: null };
+    }
+  }
+
+  const t0 = Date.now();
+  const ts = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
+
+  // AI-powered response
+  addMessage('user', trimmed);
+  const systemPrompt = await buildSystemPrompt(triggerType);
+  const { name: agentName } = getActiveAgent();
+  console.log(`[Router:${triggerType}] start → AI call (${agentName})`);
+
+  let djResponse;
+  try {
+    djResponse = await generate(systemPrompt, trimmed);
+    console.log(`[Router:${triggerType}] ${ts()} AI done — tracks=${djResponse.play?.length ?? 0}${djResponse.play?.length === 0 ? ` say="${djResponse.say?.slice(0, 80)}"` : ''}`);
+  } catch (err) {
+    console.error(`[Router:${triggerType}] ${ts()} AI error:`, err.message);
+    return { error: err.message };
+  }
+
+  // Note: finalSay may be corrected after resolve — message stored after resolve step
+
+  // Resolve tracks + synthesize TTS in parallel
+  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS in parallel`);
+  const [resolveResult, ttsResult] = await Promise.allSettled([
+    djResponse.play?.length ? resolveTracksOrdered(djResponse.play) : Promise.resolve([]),
+    djResponse.say ? synthesize(djResponse.say) : Promise.resolve(null),
+  ]);
+
+  let resolvedTracks = [];
+  // User-chat requests default to 'now' so the song plays immediately unless AI says otherwise
+  const defaultIntent = triggerType === 'user-chat' ? 'now' : 'end';
+  let intent = djResponse.playIntent ?? defaultIntent;
+
+  // Keyword override: user's phrasing is more reliable than AI intent inference
+  if (triggerType === 'user-chat') {
+    const lower = trimmed.toLowerCase();
+    if (/\b(next|after this|queue(?: it)? up|play next)\b/.test(lower)) intent = 'next';
+    else if (/\b(add|save for later|put in(?: the)? queue|add to playlist|later)\b/.test(lower) &&
+             !/\bnow\b/.test(lower)) intent = 'end';
+  }
+
+  const addToQueue = (intent === 'now' || intent === 'next') ? enqueueNext : enqueue;
+
+  if (resolveResult.status === 'fulfilled') {
+    resolvedTracks = resolveResult.value;
+    try {
+      addToQueue(resolvedTracks);
+      console.log(`[Router:${triggerType}] ${ts()} resolve done — ${resolvedTracks.length}/${djResponse.play?.length ?? 0} tracks (intent=${intent})`);
+      prewarmCache(resolvedTracks.map(t => t.videoId));
+    } catch (err) {
+      console.warn(`[Router:${triggerType}] ${ts()} enqueue failed:`, err.message);
+    }
+  } else {
+    console.warn(`[Router:${triggerType}] ${ts()} resolve failed:`, resolveResult.reason?.message);
+    try { addToQueue(djResponse.play.map(t => ({ source: t.source ?? 'any', title: t.title, artist: t.artist ?? '', uri: null }))); } catch {}
+  }
+
+  const firstTrack = resolvedTracks[0] ?? null;
+
+  // Detect and fix AI say/track mismatch (AI hallucinated a different song in say)
+  let finalSay = djResponse.say;
+  let ttsUrl = null;
+
+  if (firstTrack && finalSay) {
+    const title = (firstTrack.resolvedTitle ?? firstTrack.title ?? '').toLowerCase();
+    if (title && !finalSay.toLowerCase().includes(title)) {
+      const displayTitle  = firstTrack.resolvedTitle  ?? firstTrack.title;
+      const displayArtist = firstTrack.resolvedArtist ?? firstTrack.artist ?? '';
+      // The DJ hallucinated a different song in say — discard the mismatched description
+      // and just announce the actual track cleanly to avoid confusing the listener
+      finalSay = displayArtist ? `${displayTitle} by ${displayArtist}` : displayTitle;
+      console.log(`[Router:${triggerType}] ${ts()} say mismatch — replaced with actual track: "${finalSay}"`);
+      // Re-synthesize (discard parallel TTS result which was for the hallucinated say)
+      const corrected = await synthesize(finalSay).catch(err => {
+        console.warn(`[Router:${triggerType}] TTS re-synth error:`, err.message);
+        return null;
+      });
+      if (corrected) ttsUrl = corrected.url;
+    }
+  }
+
+  if (!ttsUrl) {
+    if (ttsResult.status === 'fulfilled' && ttsResult.value) {
+      ttsUrl = ttsResult.value.url;
+      console.log(`[Router:${triggerType}] ${ts()} TTS done → ${ttsUrl}`);
+    } else if (ttsResult.status === 'rejected') {
+      console.error(`[Router:${triggerType}] ${ts()} TTS error:`, ttsResult.reason?.message);
+    }
+  }
+
+  addMessage('assistant', finalSay);
+  console.log(`[Router:${triggerType}] ${ts()} broadcasting — firstTrack="${firstTrack?.resolvedTitle ?? firstTrack?.title ?? 'none'}" videoId=${firstTrack?.videoId ?? 'null'}`);
+
+  broadcast('dj-response', {
+    agent: agentName,
+    say: finalSay,
+    ttsUrl,
+    play: resolvedTracks.length ? resolvedTracks : djResponse.play,
+    firstTrack,
+    reason: djResponse.reason,
+    segue: djResponse.segue,
+    playIntent: intent,
+    trigger: triggerType,   // client uses this to decide immediate vs near-end playback
+  });
+
+  return { djResponse, resolvedTracks, ttsUrl, agent: agentName };
+}

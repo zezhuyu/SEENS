@@ -1,0 +1,282 @@
+/* ─── Album art ───────────────────────────────────────────────────────────── */
+#art-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 16px;
+  overflow: hidden;
+  margin-bottom: 20px;
+  background: var(--surface2);
+}
+
+#art-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  filter: blur(40px) brightness(0.4) saturate(1.8);
+  transform: scale(1.1);
+  transition: background-image 0.6s;
+}
+
+#art-img {
+  position: relative;
+  width: 65%;
+  aspect-ratio: 1;
+  margin: 17.5% auto 0;
+  border-radius: 12px;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+
+#art-img img { width: 100%; height: 100%; object-fit: cover; display: none; }
+#art-img img.loaded { display: block; }
+
+#art-placeholder {
+  width: 48px;
+  height: 48px;
+  opacity: 0.15;
+}
+
+/* Vinyl spin when playing */
+#art-img.playing { animation: spin 12s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Track info ──────────────────────────────────────────────────────────── */
+#track-info {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+#track-title {
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#track-artist {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+#track-source {
+  margin-top: 6px;
+}
+
+/* ─── Progress bar ────────────────────────────────────────────────────────── */
+#progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+#progress-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--surface2);
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+}
+
+#progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.5s linear;
+}
+
+#time-current, #time-total {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  min-width: 32px;
+}
+#time-total { text-align: right; }
+
+/* ─── Controls ────────────────────────────────────────────────────────────── */
+#controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.ctrl-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-dim);
+  transition: color 0.15s, transform 0.1s;
+  padding: 6px;
+  border-radius: 50%;
+}
+.ctrl-btn:hover { color: var(--text); }
+.ctrl-btn:active { transform: scale(0.92); }
+.ctrl-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
+#btn-play {
+  width: 52px;
+  height: 52px;
+  background: var(--accent);
+  border-radius: 50%;
+  color: #fff;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#btn-play svg { width: 22px; height: 22px; fill: currentColor; stroke: none; }
+#btn-play:hover { background: #c44d20; color: #fff; }
+
+/* ─── Volume ──────────────────────────────────────────────────────────────── */
+#volume-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+#volume-wrap svg { width: 16px; height: 16px; fill: none; stroke: var(--text-muted); stroke-width: 1.5; }
+#volume-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--surface2);
+  outline: none;
+  cursor: pointer;
+}
+#volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+/* ─── DJ commentary ───────────────────────────────────────────────────────── */
+#dj-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 12px;
+  min-height: 70px;
+}
+
+#dj-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#dj-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+#dj-dot.pulsing { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
+}
+
+#dj-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+#dj-agent { font-size: 10px; }
+
+#dj-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* ─── Chat input ──────────────────────────────────────────────────────────── */
+#chat-wrap {
+  display: flex;
+  gap: 8px;
+}
+
+#chat-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  resize: none;
+  height: 40px;
+  transition: border-color 0.15s;
+}
+#chat-input:focus { border-color: var(--accent); height: 80px; }
+
+#btn-send {
+  width: 40px;
+  height: 40px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+#btn-send:hover { opacity: 0.85; }
+#btn-send svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; }
+
+/* ─── Waveform animation (now-playing indicator) ──────────────────────────── */
+.waveform {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+.waveform span {
+  display: block;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: wave 0.8s ease-in-out infinite alternate;
+}
+.waveform span:nth-child(2) { animation-delay: 0.15s; }
+.waveform span:nth-child(3) { animation-delay: 0.3s;  }
+.waveform span:nth-child(4) { animation-delay: 0.45s; }
+@keyframes wave {
+  from { height: 2px; }
+  to   { height: 14px; }
+}
+
+/* ─── Up next ─────────────────────────────────────────────────────────────── */
+#up-next {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 8px;
+  margin-bottom: 12px;
+}
+#up-next span { color: var(--text-dim); }
