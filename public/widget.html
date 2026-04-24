@@ -188,8 +188,11 @@ body {
 .progress i { display:block; height:100%; background:var(--ink); border-radius:999px; transition:width .3s linear; }
 .progress-times { display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:10px; color:var(--ink-3); letter-spacing:.05em; }
 .vol { display:flex; align-items:center; gap:6px; color:var(--ink-3); }
-.vol input[type=range] { appearance:none; -webkit-appearance:none; width:56px; height:3px; background:var(--surface-2); border-radius:999px; outline:none; }
+.vol input[type=range] { appearance:none; -webkit-appearance:none; flex:1; min-width:0; height:3px; background:var(--surface-2); border-radius:999px; outline:none; }
 .vol input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:10px; height:10px; border-radius:50%; background:var(--ink); cursor:pointer; }
+.vol-airplay-btn { appearance:none; border:none; background:transparent; padding:3px; cursor:pointer; color:var(--ink-3); display:grid; place-items:center; border-radius:4px; flex-shrink:0; opacity:0.65; transition:color .15s,opacity .15s; }
+.vol-airplay-btn:hover { color:var(--ink); opacity:1; }
+.vol-airplay-btn.active { color:var(--accent); opacity:1; }
 .tab-panel { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; border-bottom:0.5px solid var(--line-soft); }
 .tab-bar { display:flex; padding:8px 14px 0; gap:4px; align-items:center; flex-shrink:0; }
 .tab-btn { appearance:none; border:0; background:transparent; padding:8px 10px 9px; font-family:var(--font-mono); font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color:var(--ink-3); cursor:pointer; position:relative; display:flex; align-items:center; gap:6px; white-space:nowrap; transition:color .15s; }
@@ -1978,136 +1981,105 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         <div className="progress-times"><span>{timeCur}</span><span>{timeTotal}</span></div>
         <div className="vol" style={{ paddingTop:'6px' }}>
           <Icon.Vol/>
-          <input type="range" min={0} max={100} value={volume} style={{ width:'100%' }}
+          <input type="range" min={0} max={100} value={volume}
             onChange={e => { const v = Number(e.target.value); setVolume(v); audioRef.current.volume = v / 100; }}/>
-        </div>
-        {(upnpRenderer || airplayInSafari || sysAudioDevice || isElectron) && size !== 'mini' && (
-          <div className="cast-row" style={{ display:'flex', gap:6, paddingTop:6, flexWrap:'wrap', position:'relative' }}>
-            {upnpRenderer && (
-              <button title={`Casting to ${upnpRenderer.name} — click to stop`}
-                style={{ appearance:'none', border:'0.5px solid var(--accent)', background:'var(--accent-weak)', color:'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
-                onClick={() => {
-                  fetch('/api/upnp/stop', { method:'POST' }).catch(() => {});
-                  fetch('/api/upnp/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(() => setUpnpRenderer(null));
-                }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v12h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                {upnpRenderer.name}
-              </button>
-            )}
-            {airplayInSafari && (
+          {/* AirPlay icon button — right of volume slider */}
+          {(airplayInSafari || isElectron) && size !== 'mini' && (
+            <div style={{ position:'relative', flexShrink:0 }}>
               <button
-                title={airplayActive ? 'AirPlay active — click to change output' : 'Cast via AirPlay'}
-                style={{ appearance:'none', border:'0.5px solid var(--accent)', background: airplayActive ? 'var(--accent)' : 'var(--accent-weak)', color: airplayActive ? 'var(--bg)' : 'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
-                onClick={() => {
-                  audioRef.current?.webkitShowPlaybackTargetPicker?.();
-                }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                {airplayActive ? 'AirPlay ●' : 'AirPlay'}
+                className={`vol-airplay-btn${(airplayActive || sysAudioDevice || raopDevice || electronSysPicker) ? ' active' : ''}`}
+                title={sysAudioDevice ? `AirPlay: ${sysAudioDevice.name} — click to stop` : raopDevice ? `AirPlay: ${raopDevice.name} — click to stop` : airplayActive ? 'AirPlay active — click to change output' : 'AirPlay'}
+                onClick={airplayInSafari
+                  ? () => audioRef.current?.webkitShowPlaybackTargetPicker?.()
+                  : async () => {
+                      if (sysAudioDevice) {
+                        await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+                        setSysAudioDevice(null);
+                      } else if (raopDevice) {
+                        await fetch('/api/airplay/stop', { method:'POST' }).catch(() => {});
+                        await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).catch(() => {});
+                        audioRef.current.muted = false;
+                        setRaopDevice(null);
+                      } else if (electronSysPicker) {
+                        setElectronSysPicker(false);
+                      } else {
+                        setElectronSysDevices([{ _scanning: true }]);
+                        setElectronSysPicker(true);
+                        const [sysRes, apRes] = await Promise.allSettled([
+                          fetch('/api/airplay/sys-devices').then(r => r.json()),
+                          fetch('/api/airplay/devices').then(r => r.json()),
+                        ]);
+                        const sysDevs = sysRes.status === 'fulfilled' && !sysRes.value.error
+                          ? (sysRes.value.devices ?? []).map(n => ({ name: n, type: 'sys' }))
+                          : [];
+                        const apDevs = apRes.status === 'fulfilled'
+                          ? (apRes.value.devices ?? []).map(d => ({ ...d, type: 'raop' }))
+                          : [];
+                        const merged = [...apDevs, ...sysDevs];
+                        setElectronSysDevices(merged.length ? merged : [{ _empty: true }]);
+                      }
+                    }
+                }>
+                {/* Apple-style AirPlay icon: screen outline + solid triangle */}
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h18a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2"/>
+                  <polygon points="12 15 17 21 7 21" fill="currentColor" stroke="none"/>
+                </svg>
               </button>
-            )}
-            {/* Electron: active device badge — click to restore original output */}
-            {(sysAudioDevice || raopDevice) && (
-              <button
-                title={`Audio output: ${(sysAudioDevice ?? raopDevice).name} — click to stop`}
-                style={{ appearance:'none', border:'0.5px solid var(--accent)', background:'var(--accent)', color:'var(--bg)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
-                onClick={async () => {
-                  if (raopDevice) {
-                    // Stop RAOP streaming and unmute local audio
-                    await fetch('/api/airplay/stop', { method:'POST' }).catch(() => {});
-                    await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).catch(() => {});
-                    audioRef.current.muted = false;
-                    setRaopDevice(null);
-                  } else {
-                    await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
-                    setSysAudioDevice(null);
-                  }
-                }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                {(sysAudioDevice ?? raopDevice).name} ●
-              </button>
-            )}
-            {/* Electron: AirPlay button — local outputs (SwitchAudioSource) + network AirPlay (mDNS) */}
-            {isElectron && !sysAudioDevice && !raopDevice && (
-              <div style={{ position:'relative' }}>
-                <button
-                  title="Route audio to AirPlay or other output"
-                  style={{ appearance:'none', border:'0.5px solid var(--accent)', background: electronSysPicker ? 'var(--accent)' : 'var(--accent-weak)', color: electronSysPicker ? 'var(--bg)' : 'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
-                  onClick={async () => {
-                    if (electronSysPicker) { setElectronSysPicker(false); return; }
-                    // Show immediately with scanning state, then populate
-                    setElectronSysDevices([{ _scanning: true }]);
-                    setElectronSysPicker(true);
-                    // Fetch local outputs and mDNS AirPlay devices in parallel
-                    const [sysRes, apRes] = await Promise.allSettled([
-                      fetch('/api/airplay/sys-devices').then(r => r.json()),
-                      fetch('/api/airplay/devices').then(r => r.json()),
-                    ]);
-                    const sysDevs = sysRes.status === 'fulfilled' && !sysRes.value.error
-                      ? (sysRes.value.devices ?? []).map(n => ({ name: n, type: 'sys' }))
-                      : [];
-                    const apDevs = apRes.status === 'fulfilled'
-                      ? (apRes.value.devices ?? []).map(d => ({ ...d, type: 'raop' }))
-                      : [];
-                    const merged = [...apDevs, ...sysDevs];
-                    setElectronSysDevices(merged.length ? merged : [{ _empty: true }]);
-                  }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                  AirPlay
-                </button>
-                {electronSysPicker && (
-                  <div style={{ position:'absolute', bottom:'calc(100% + 4px)', left:0, background:'var(--surface)', border:'0.5px solid var(--line)', borderRadius:8, padding:'4px 0', minWidth:220, zIndex:200, boxShadow:'0 4px 16px rgba(0,0,0,0.25)' }}>
-                    {electronSysDevices.map((dev, i) => {
-                      if (dev._scanning) return (
-                        <div key="scan" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>Scanning…</div>
-                      );
-                      if (dev._empty) return (
-                        <div key="empty" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>No devices found</div>
-                      );
-                      if (dev._err) return (
-                        <div key={i} style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>{dev._err}</div>
-                      );
-                      return (
-                        <button key={dev.name + dev.type}
-                          style={{ display:'block', width:'100%', textAlign:'left', padding:'6px 12px', fontSize:11, fontFamily:'var(--font-mono)', background:'none', border:'none', color:'var(--ink)', cursor:'pointer' }}
-                          onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
-                          onMouseLeave={e => e.currentTarget.style.background='none'}
-                          onClick={async () => {
-                            if (dev.type === 'raop') {
-                              // Try sys-select first: if SwitchAudioSource is installed and the device
-                              // is a CoreAudio output, this routes ALL audio with zero extra work.
-                              const sysRes = await fetch('/api/airplay/sys-select', {
-                                method:'POST', headers:{'Content-Type':'application/json'},
-                                body: JSON.stringify({ name: dev.name }),
-                              }).then(r => r.json()).catch(() => null);
-
-                              if (sysRes?.ok) {
-                                setSysAudioDevice({ name: dev.name });
-                                // macOS needs ~800ms to switch CoreAudio output — then resume
-                                setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
-                              } else {
-                                // Fallback: server-side RAOP streaming via airtunes2
-                                await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name, host: dev.host, port: dev.port }) });
-                                setRaopDevice({ name: dev.name, host: dev.host, port: dev.port });
-                                // The raopDevice useEffect will fire immediately and start streaming
-                              }
+              {isElectron && electronSysPicker && (
+                <div style={{ position:'absolute', bottom:'calc(100% + 6px)', right:0, background:'var(--surface)', border:'0.5px solid var(--line)', borderRadius:8, padding:'4px 0', minWidth:220, zIndex:200, boxShadow:'0 4px 20px rgba(0,0,0,0.3)' }}>
+                  {electronSysDevices.map((dev, i) => {
+                    if (dev._scanning) return <div key="scan" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>Scanning…</div>;
+                    if (dev._empty)   return <div key="empty" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>No devices found</div>;
+                    if (dev._err)     return <div key={i} style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>{dev._err}</div>;
+                    return (
+                      <button key={dev.name + dev.type}
+                        style={{ display:'block', width:'100%', textAlign:'left', padding:'6px 12px', fontSize:11, fontFamily:'var(--font-mono)', background:'none', border:'none', color:'var(--ink)', cursor:'pointer' }}
+                        onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
+                        onMouseLeave={e => e.currentTarget.style.background='none'}
+                        onClick={async () => {
+                          if (dev.type === 'raop') {
+                            const sysRes = await fetch('/api/airplay/sys-select', {
+                              method:'POST', headers:{'Content-Type':'application/json'},
+                              body: JSON.stringify({ name: dev.name }),
+                            }).then(r => r.json()).catch(() => null);
+                            if (sysRes?.ok) {
+                              setSysAudioDevice({ name: dev.name });
+                              setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
                             } else {
-                              const r = await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name }) });
-                              if ((await r.json().catch(() => ({}))).ok) {
-                                setSysAudioDevice({ name: dev.name });
-                                setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
-                              }
+                              await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name, host: dev.host, port: dev.port }) });
+                              setRaopDevice({ name: dev.name, host: dev.host, port: dev.port });
                             }
-                            setElectronSysPicker(false);
-                          }}>
-                          <span style={{ fontSize:9, opacity:0.5, marginRight:4 }}>{dev.type === 'raop' ? '📡' : '🔊'}</span>
-                          {dev.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
+                          } else {
+                            const r = await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name }) });
+                            if ((await r.json().catch(() => ({}))).ok) {
+                              setSysAudioDevice({ name: dev.name });
+                              setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
+                            }
+                          }
+                          setElectronSysPicker(false);
+                        }}>
+                        <span style={{ fontSize:9, opacity:0.5, marginRight:4 }}>{dev.type === 'raop' ? '📡' : '🔊'}</span>
+                        {dev.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {upnpRenderer && size !== 'mini' && (
+          <div className="cast-row" style={{ display:'flex', gap:6, paddingTop:6 }}>
+            <button title={`Casting to ${upnpRenderer.name} — click to stop`}
+              style={{ appearance:'none', border:'0.5px solid var(--accent)', background:'var(--accent-weak)', color:'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
+              onClick={() => {
+                fetch('/api/upnp/stop', { method:'POST' }).catch(() => {});
+                fetch('/api/upnp/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(() => setUpnpRenderer(null));
+              }}>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v12h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
+              {upnpRenderer.name}
+            </button>
           </div>
         )}
       </div>
