@@ -70,7 +70,8 @@ async function _resolve(videoId) {
       console.log(`[Stream] Resolved ${videoId} (${label}) → ${url.slice(0, 80)}...`);
       return url;
     } catch (err) {
-      const detail = err.stderr?.trim().split('\n').pop() ?? err.message;
+      const stderrLast = err.stderr?.trim().split('\n').pop();
+      const detail = (stderrLast || err.message) || String(err);
       console.warn(`[Stream] yt-dlp ${label} failed for ${videoId}: ${detail}`);
       lastErr = new Error(`yt-dlp: ${detail}`);
     }
