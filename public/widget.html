@@ -39,6 +39,51 @@
 }
 * { box-sizing: border-box; }
 html, body { margin:0; padding:0; height:100%; font-family:var(--font-sans); color:var(--ink); -webkit-font-smoothing:antialiased; }
+
+/* ── Electron: widget fills the entire window ── */
+html.electron { height: 100vh; overflow: hidden; }
+html.electron body {
+  display: block;
+  background: var(--bg);
+  height: 100vh;
+  overflow: hidden;
+  margin: 0; padding: 0;
+}
+html.electron #root {
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+/* Widget: override fixed widths/heights so it fills the window */
+html.electron .widget,
+html.electron .widget.mini,
+html.electron .widget.expanded {
+  width: 100% !important;
+  height: 100vh !important;
+  max-width: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+  transition: none !important;
+}
+/* Hide fake traffic-light dots — native ones are shown by Electron */
+html.electron .tl-dots { display: none !important; }
+/* Hide the expand/collapse size button — window resizing drives that */
+html.electron .widget-size-btn { display: none !important; }
+/* Shift titlebar and settings header right to clear native traffic lights (at x:12) */
+html.electron .titlebar,
+html.electron .settings-header {
+  padding-left: 72px !important;
+  -webkit-app-region: drag;
+}
+/* Interactive controls inside draggable headers must not be in the drag zone */
+html.electron .titlebar button,
+html.electron .theme-pill,
+html.electron .settings-header button,
+html.electron .settings-header a {
+  -webkit-app-region: no-drag;
+}
+
 body {
   background:
     radial-gradient(ellipse at 20% 15%, oklch(0.75 0.10 230 / 0.55), transparent 55%),
@@ -304,6 +349,8 @@ body {
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+<!-- Detect Electron before React mounts so CSS class is ready immediately -->
+<script>if (window.__electron__?.isElectron) document.documentElement.classList.add('electron');</script>
 </head>
 <body>
 <div id="root"></div>
@@ -555,7 +602,12 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   }, [open]);
 
   const save = (patch) => {
-    setS(prev => ({ ...prev, ...patch }));
+    // Normalise dotted API keys → the flat field names the UI reads from `s`
+    const localPatch = { ...patch };
+    if ('mood.energy' in patch) localPatch.energy = patch['mood.energy'];
+    if ('tts.voice'   in patch) localPatch.voice  = patch['tts.voice'];
+    setS(prev => ({ ...prev, ...localPatch }));
+
     const body = {};
     if ('agent' in patch) {
       fetch('/api/settings/agent', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ agent: patch.agent }) });
@@ -755,24 +807,34 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
               <div className="settings-row-label">Location</div>
               <button className="settings-btn" style={{ fontSize:'9px' }} onClick={() => {
-                if (!navigator.geolocation) return;
-                navigator.geolocation.getCurrentPosition(({ coords }) => {
-                  const { latitude: lat, longitude: lon } = coords;
-                  fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, { headers: { 'User-Agent': 'SeensRadio/1.0' } })
-                    .then(r => r.json())
-                    .then(geo => {
-                      const city = geo.address?.city || geo.address?.town || geo.address?.village || geo.address?.county || '';
-                      const country = geo.address?.country || '';
-                      const loc = city ? `${city}${country ? ', ' + country : ''}` : `${lat.toFixed(3)},${lon.toFixed(3)}`;
-                      setLocationDraft(loc);
-                      fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ location: loc }) });
-                    })
-                    .catch(() => {
-                      const loc = `${lat.toFixed(4)},${lon.toFixed(4)}`;
-                      setLocationDraft(loc);
-                      fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ location: loc }) });
-                    });
-                }, () => alert('Location permission denied.'));
+                const saveLocation = loc => {
+                  setLocationDraft(loc);
+                  fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ location: loc }) });
+                };
+                const fromServer = () =>
+                  fetch('/api/location').then(r => r.ok ? r.json() : null).then(data => {
+                    if (!data || data.error) return;
+                    const city = data.city || '';
+                    const country = data.country || '';
+                    const loc = city ? `${city}${country ? ', ' + country : ''}` : (data.lat != null ? `${Number(data.lat).toFixed(3)},${Number(data.lon).toFixed(3)}` : '');
+                    if (loc) saveLocation(loc);
+                  }).catch(() => {});
+                // Try accurate GPS/Wi-Fi via browser geolocation first (triggers macOS permission dialog)
+                if (navigator.geolocation) {
+                  navigator.geolocation.getCurrentPosition(({ coords }) => {
+                    const { latitude: lat, longitude: lon } = coords;
+                    fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, { headers: { 'User-Agent': 'SeensRadio/1.0' } })
+                      .then(r => r.json())
+                      .then(geo => {
+                        const city = geo.address?.city || geo.address?.town || geo.address?.village || geo.address?.county || '';
+                        const country = geo.address?.country || '';
+                        saveLocation(city ? `${city}${country ? ', ' + country : ''}` : `${lat.toFixed(3)},${lon.toFixed(3)}`);
+                      })
+                      .catch(() => saveLocation(`${lat.toFixed(4)},${lon.toFixed(4)}`));
+                  }, fromServer, { timeout: 10000 });
+                } else {
+                  fromServer();
+                }
               }}>Detect →</button>
             </div>
             <div className="settings-row-sub">Auto-detected or type a city — used for weather-aware playlists</div>
@@ -945,35 +1007,24 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { categoryFilterRef.current = categoryFilter; }, [categoryFilter]);
 
-  // ── auto-detect location once on mount (if not already saved)
+  // ── auto-detect location once on mount via server-side IP lookup (no browser permission needed)
   useEffect(() => {
-    if (!navigator.geolocation) return;
     fetch('/api/settings')
       .then(r => r.ok ? r.json() : null)
       .then(s => {
-        if (s?.location) return; // already set
-        navigator.geolocation.getCurrentPosition(({ coords }) => {
-          const { latitude: lat, longitude: lon } = coords;
-          fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, {
-            headers: { 'User-Agent': 'SeensRadio/1.0' },
-          })
-            .then(r => r.json())
-            .then(geo => {
-              const city = geo.address?.city || geo.address?.town || geo.address?.village || geo.address?.county || '';
-              const country = geo.address?.country || '';
-              const location = city ? `${city}${country ? ', ' + country : ''}` : `${lat.toFixed(3)},${lon.toFixed(3)}`;
-              fetch('/api/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ location }),
-              }).then(() => console.log('[Location] auto-detected:', location));
-            })
-            .catch(() => {
-              // Nominatim failed — save raw coords (wttr.in accepts lat,lon)
-              const location = `${lat.toFixed(4)},${lon.toFixed(4)}`;
-              fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location }) });
-            });
-        }, () => {}); // permission denied — silent, user can set manually
+        if (s?.location) return null; // already set
+        return fetch('/api/location').then(r => r.ok ? r.json() : null);
+      })
+      .then(data => {
+        if (!data || data.error) return;
+        const city = data.city || '';
+        const country = data.country || '';
+        const location = city
+          ? `${city}${country ? ', ' + country : ''}`
+          : (data.lat != null ? `${Number(data.lat).toFixed(3)},${Number(data.lon).toFixed(3)}` : '');
+        if (!location) return;
+        fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location }) })
+          .then(() => console.log('[Location] auto-detected:', location));
       })
       .catch(() => {});
   }, []);
@@ -1238,6 +1289,9 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     ttsRef.current.play().catch(() => {
       ttsPlayingRef.current = false;
       audioRef.current.volume = volumeRef.current / 100;
+      // TTS play rejected — don't leave cold-start track stuck waiting forever
+      if (coldStartTrackRef.current) { coldStartTrackRef.current = null; skipNextRef.current?.(); }
+      else if (skipAfterTTSRef.current) { skipAfterTTSRef.current = false; skipNextRef.current?.(); }
     });
   }, []);
 
@@ -1392,6 +1446,9 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     const onError = () => {
       ttsPlayingRef.current = false;
       audioRef.current.volume = volumeRef.current / 100;
+      // TTS resource error — same recovery as play rejection
+      if (coldStartTrackRef.current) { coldStartTrackRef.current = null; skipNextRef.current?.(); }
+      else if (skipAfterTTSRef.current) { skipAfterTTSRef.current = false; skipNextRef.current?.(); }
     };
     tts.addEventListener('ended', onEnded);
     tts.addEventListener('error', onError);
@@ -1562,23 +1619,21 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     userChatPendingRef.current = true; // expect a user-chat dj-response; block scheduler
     waitForInteractRef.current = false;
 
-    // Safari autoplay unlock: call play() on both elements while inside the user gesture.
-    // Without this, play() called later (after async TTS → await fetch) is blocked.
-    const unlock = (el) => {
-      el.muted = true;
-      el.play().then(() => { el.pause(); el.muted = false; }).catch(() => { el.muted = false; });
-    };
-    unlock(audioRef.current);
-    unlock(ttsRef.current);
     try {
       await fetch('/api/settings/queue/clear', { method: 'POST' });
-      fetch('/api/chat', {
+      const chatRes = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: 'Start my listening session. Tell me what you have planned and introduce the first track.' }),
       });
-      // WS dj-response will dismiss overlay
-    } catch { userChatPendingRef.current = false; skipNextRef.current(); }
+      if (!chatRes.ok) {
+        const errJson = await chatRes.json().catch(() => ({ error: `HTTP ${chatRes.status}` }));
+        console.error('[startRadio] /api/chat error:', errJson.error);
+        setOverlayLabel(`DJ error: ${errJson.error}`);
+        userChatPendingRef.current = false;
+      }
+      // On success, WS dj-response will dismiss overlay
+    } catch (err) { console.error('[startRadio] fetch failed:', err); userChatPendingRef.current = false; skipNextRef.current(); }
   };
 
   // ── DJ chat send
@@ -1601,9 +1656,10 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   };
 
   // ── rest
-  const preBreakSrcRef     = useRef('');
-  const preBreakTimeRef    = useRef(0);
+  const preBreakSrcRef      = useRef('');
+  const preBreakTimeRef     = useRef(0);
   const didPauseForBreakRef = useRef(false);
+  const preBreakWindowSize  = useRef(null); // saved Electron window size before expansion
 
   const triggerRest = useCallback(() => {
     // Save position but don't pause — music keeps playing until we know the piece is Music
@@ -1611,6 +1667,14 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     preBreakSrcRef.current      = audio.src ?? '';
     preBreakTimeRef.current     = audio.currentTime ?? 0;
     didPauseForBreakRef.current = false;
+    // Expand Electron window so the artwork panel has room
+    if (isElectronApp && window.__electron__?.resizeWindow) {
+      const getSz = window.__electron__.getWindowSize?.();
+      (getSz ? getSz : Promise.resolve({ width: 380, height: 700 }))
+        .then(sz => { preBreakWindowSize.current = sz || { width: 380, height: 700 }; })
+        .catch(() => { preBreakWindowSize.current = { width: 380, height: 700 }; });
+      window.__electron__.resizeWindow(460, 820);
+    }
     setResting(true);
     setRestPhase('reveal'); // skip transition screen — go straight to artwork
   }, []);
@@ -1624,6 +1688,12 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     setResting(false);
     setRestPhase(null);
     setSessionSecs(0);
+    // Restore Electron window to its previous size
+    if (isElectronApp && window.__electron__?.resizeWindow) {
+      const sz = preBreakWindowSize.current || { width: 380, height: 700 };
+      window.__electron__.resizeWindow(sz.width, sz.height);
+      preBreakWindowSize.current = null;
+    }
     // Only restore if we paused for a Music piece
     if (didPauseForBreakRef.current) {
       didPauseForBreakRef.current = false;
@@ -1724,7 +1794,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     <div
       className={`widget ${size} ${resting ? 'resting' : ''} ${restPhase === 'reveal' ? 'rest-reveal' : ''}`}
       data-theme={dark ? 'dark' : 'light'}
-      style={{ '--accent': accent }}
+      style={{ '--accent': accent, ...(isElectronApp ? { width:'100%', height:'100vh', borderRadius:0, boxShadow:'none', overflow:'hidden', transition:'none' } : {}) }}
     >
 
       {/* Titlebar */}
@@ -1736,10 +1806,10 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
             <button className={!dark?'active':''} onClick={() => setDark(false)}>L</button>
             <button className={dark?'active':''} onClick={() => setDark(true)}>D</button>
           </div>
-          <button className="size-toggle" onClick={() => setShowSettings(true)} aria-label="Settings">
+          <button className="size-toggle settings-open-btn" onClick={() => setShowSettings(true)} aria-label="Settings">
             <Icon.Settings/>
           </button>
-          <button className="size-toggle" onClick={() => {
+          <button className="size-toggle widget-size-btn" onClick={() => {
             setSize(size === 'mini' ? 'expanded' : 'mini');
           }}>
             {size==='expanded' ? <Icon.Collapse/> : <Icon.Expand/>}
@@ -1820,7 +1890,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         <div className="vol" style={{ paddingTop:'6px' }}>
           <Icon.Vol/>
           <input type="range" min={0} max={100} value={volume} style={{ width:'100%' }}
-            onChange={e => { setVolume(Number(e.target.value)); if (!ttsPlayingRef.current) audioRef.current.volume = Number(e.target.value)/100; }}/>
+            onChange={e => { const v = Number(e.target.value); setVolume(v); audioRef.current.volume = v / 100; }}/>
         </div>
         {(upnpRenderer || airplayInSafari || sysAudioDevice || isElectron) && size !== 'mini' && (
           <div className="cast-row" style={{ display:'flex', gap:6, paddingTop:6, flexWrap:'wrap', position:'relative' }}>
@@ -1867,26 +1937,34 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
                   style={{ appearance:'none', border:'0.5px solid var(--accent)', background: electronSysPicker ? 'var(--accent)' : 'var(--accent-weak)', color: electronSysPicker ? 'var(--bg)' : 'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
                   onClick={async () => {
                     if (electronSysPicker) { setElectronSysPicker(false); return; }
-                    const d = await fetch('/api/airplay/sys-devices').then(r => r.json()).catch(() => ({ devices:[] }));
-                    setElectronSysDevices(d.devices ?? []);
+                    const res = await fetch('/api/airplay/sys-devices').catch(() => null);
+                    const d = res ? await res.json().catch(() => ({})) : {};
+                    setElectronSysDevices(d.error ? [{ _err: d.error }] : (d.devices ?? []).map(n => ({ name: n })));
                     setElectronSysPicker(true);
                   }}>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
                   AirPlay
                 </button>
-                {electronSysPicker && electronSysDevices.length > 0 && (
-                  <div style={{ position:'absolute', bottom:'calc(100% + 4px)', left:0, background:'var(--surface)', border:'0.5px solid var(--line)', borderRadius:8, padding:'4px 0', minWidth:180, zIndex:200, boxShadow:'0 4px 16px rgba(0,0,0,0.25)' }}>
-                    {electronSysDevices.map(name => (
-                      <button key={name}
+                {electronSysPicker && (
+                  <div style={{ position:'absolute', bottom:'calc(100% + 4px)', left:0, background:'var(--surface)', border:'0.5px solid var(--line)', borderRadius:8, padding:'4px 0', minWidth:200, zIndex:200, boxShadow:'0 4px 16px rgba(0,0,0,0.25)' }}>
+                    {electronSysDevices.length === 0 && (
+                      <div style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>No output devices found</div>
+                    )}
+                    {electronSysDevices.map((dev, i) => dev._err ? (
+                      <div key={i} style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)', whiteSpace:'pre-wrap', wordBreak:'break-all' }}>
+                        Error: {dev._err}
+                      </div>
+                    ) : (
+                      <button key={dev.name}
                         style={{ display:'block', width:'100%', textAlign:'left', padding:'6px 12px', fontSize:11, fontFamily:'var(--font-mono)', background:'none', border:'none', color:'var(--ink)', cursor:'pointer' }}
                         onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
                         onMouseLeave={e => e.currentTarget.style.background='none'}
                         onClick={async () => {
-                          await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
-                          setSysAudioDevice({ name });
+                          await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name }) });
+                          setSysAudioDevice({ name: dev.name });
                           setElectronSysPicker(false);
                         }}>
-                        {name}
+                        {dev.name}
                       </button>
                     ))}
                   </div>
@@ -1958,7 +2036,21 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       {!started && (
         <div className="tune-in-gate" style={{ borderRadius:0 }}>
           <div className="ti-label">SEENS · FM</div>
-          <button className="ti-btn" onClick={startRadio} disabled={overlayLabel !== 'Tune in'}>{overlayLabel}</button>
+          <button className="ti-btn" onClick={() => {
+            // Permanently unlock audio via Web Audio API inside this user gesture.
+            // Chromium blocks audio.play() after async gaps; an AudioContext started
+            // synchronously here marks the document as "user-activated" for all time.
+            try {
+              const ac = new AudioContext();
+              const buf = ac.createBuffer(1, 1, 22050);
+              const src = ac.createBufferSource();
+              src.buffer = buf;
+              src.connect(ac.destination);
+              src.start(0);
+              ac.resume();
+            } catch {}
+            startRadio();
+          }} disabled={overlayLabel !== 'Tune in'}>{overlayLabel}</button>
         </div>
       )}
       </div>
@@ -1999,9 +2091,20 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 }
 
 // ── App ──────────────────────────────────────────────────────────────────────
+const isElectronApp = !!window.__electron__?.isElectron;
+function getElectronSize() { return window.innerHeight < 420 ? 'mini' : 'expanded'; }
+
 function App() {
-  const [size,            setSize]            = useState('expanded');
+  const [size,            setSize]            = useState(isElectronApp ? getElectronSize() : 'expanded');
   const [dark,            setDark]            = useState(true);
+
+  // In Electron, drive mini vs expanded from the window height automatically
+  useEffect(() => {
+    if (!isElectronApp) return;
+    const onResize = () => setSize(getElectronSize());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   const [accent,          setAccent]          = useState('#33c173');
   const [volume,          setVolume]          = useState(80);
   const [restIntervalMin, setRestIntervalMin] = useState(45);

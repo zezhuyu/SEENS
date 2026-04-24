@@ -14,7 +14,9 @@ import { spawn } from 'child_process';
 import { getPref } from './state.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CACHE_DIR = path.join(__dirname, '../tts-cache');
+const CACHE_DIR = process.env.SEENS_DATA_DIR
+  ? path.join(process.env.SEENS_DATA_DIR, 'tts-cache')
+  : path.join(__dirname, '../tts-cache');
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
 const PROVIDER = process.env.TTS_PROVIDER ?? 'elevenlabs';

@@ -42,33 +42,40 @@ async function getAudioUrl(videoId) {
 
 async function _resolve(videoId) {
   const browser = process.env.YTDLP_COOKIES_BROWSER ?? 'chrome';
-  const args = [
+  const baseArgs = [
     '-f', 'bestaudio[ext=m4a]/bestaudio',
     '--get-url',
     '--no-playlist',
-    '--cookies-from-browser', browser,
     `https://www.youtube.com/watch?v=${videoId}`,
   ];
   const opts = {
     timeout: 20_000,
-    // Pass HOME/USER so yt-dlp can find browser profile and keychain
-    env: { ...process.env, HOME: process.env.HOME ?? '/Users/' + process.env.USER },
+    env: { ...process.env, HOME: process.env.HOME ?? '/Users/' + (process.env.USER ?? 'user') },
   };
-  let stdout, stderr;
-  try {
-    ({ stdout, stderr } = await execFileAsync(YTDLP, args, { ...opts, encoding: 'utf8' }));
-  } catch (err) {
-    // execFileAsync throws on non-zero exit; err.stderr has the actual message
-    const detail = err.stderr?.trim().split('\n').pop() ?? err.message;
-    throw new Error(`yt-dlp: ${detail}`);
+
+  // Try with browser cookies first, fall back to no-cookies if keychain/access
+  // is unavailable (common in packaged Electron apps on macOS).
+  const attempts = [
+    ['with-cookies',    [...baseArgs.slice(0, -1), '--cookies-from-browser', browser, baseArgs.at(-1)]],
+    ['no-cookies',      baseArgs],
+  ];
+
+  let lastErr;
+  for (const [label, args] of attempts) {
+    try {
+      const { stdout } = await execFileAsync(YTDLP, args, { ...opts, encoding: 'utf8' });
+      const url = stdout.trim().split('\n')[0];
+      if (!url) throw new Error('yt-dlp returned no URL');
+      urlCache.set(videoId, { url, expires: Date.now() + CACHE_TTL });
+      console.log(`[Stream] Resolved ${videoId} (${label}) → ${url.slice(0, 80)}...`);
+      return url;
+    } catch (err) {
+      const detail = err.stderr?.trim().split('\n').pop() ?? err.message;
+      console.warn(`[Stream] yt-dlp ${label} failed for ${videoId}: ${detail}`);
+      lastErr = new Error(`yt-dlp: ${detail}`);
+    }
   }
-
-  const url = stdout.trim().split('\n')[0];
-  if (!url) throw new Error('yt-dlp returned no URL');
-
-  urlCache.set(videoId, { url, expires: Date.now() + CACHE_TTL });
-  console.log(`[Stream] Resolved ${videoId} → ${url.slice(0, 80)}...`);
-  return url;
+  throw lastErr;
 }
 
 // GET /api/stream/:videoId — redirect browser to CDN URL

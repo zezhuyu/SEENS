@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Personal AI radio station for Mac — Claude/Codex DJ + Spotify/Apple Music/YouTube",
   "type": "module",
-  "main": "server.js",
+  "main": "electron/main.cjs",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
@@ -38,6 +38,10 @@
     "mac": {
       "category": "public.app-category.music",
       "icon": "electron/icon.icns",
+      "extendInfo": {
+        "NSLocationWhenInUseUsageDescription": "Seens Radio uses your location to show local weather and tailor the DJ context to your city.",
+        "NSLocationUsageDescription": "Seens Radio uses your location to show local weather and tailor the DJ context to your city."
+      },
       "target": [
         {
           "target": "dmg",
@@ -56,6 +60,8 @@
       "auth/**/*",
       "public/**/*",
       "scripts/**/*",
+      "prompts/**/*",
+      "USER/**/*",
       "node_modules/**/*",
       ".env",
       "package.json"

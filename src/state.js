@@ -4,7 +4,10 @@ import path from 'path';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, '../data/state.db');
+// Use SEENS_DATA_DIR (set by Electron to userData) so writes land in
+// ~/Library/Application Support/seens-radio/ instead of inside the app bundle.
+const DATA_DIR = process.env.SEENS_DATA_DIR ?? path.join(__dirname, '../data');
+const DB_PATH = path.join(DATA_DIR, 'state.db');
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 

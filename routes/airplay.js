@@ -373,10 +373,10 @@ router.get('/stream/:videoId', async (req, res) => {
 
 // GET /api/airplay/sys-devices — list macOS audio output devices
 router.get('/sys-devices', async (req, res) => {
+  // Try SwitchAudioSource first (brew install switchaudio-osx)
   try {
     const { stdout } = await execFileAsync(SWITCHAUDIO, ['-a', '-t', 'output', '-f', 'json'])
       .catch(() => execFileAsync(SWITCHAUDIO, ['-a', '-t', 'output']));
-    // SwitchAudioSource -f json gives one JSON object per line
     let devices;
     try {
       devices = stdout.trim().split('\n').map(l => JSON.parse(l)).map(d => d.name ?? d);
@@ -384,9 +384,24 @@ router.get('/sys-devices', async (req, res) => {
       devices = stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
     }
     const { stdout: cur } = await execFileAsync(SWITCHAUDIO, ['-c', '-t', 'output']);
-    res.json({ devices, current: cur.trim() });
+    return res.json({ devices, current: cur.trim() });
+  } catch {}
+
+  // Fallback: system_profiler (built-in macOS, no install required)
+  // Note: switching via sys-select requires SwitchAudioSource — install with:
+  //   brew install switchaudio-osx
+  try {
+    const { stdout } = await execFileAsync('/usr/sbin/system_profiler', ['SPAudioDataType', '-json'], { timeout: 12_000 });
+    const data = JSON.parse(stdout);
+    // Devices are nested under _items within each SPAudioDataType group
+    const allDevices = (data.SPAudioDataType ?? []).flatMap(g => g._items ?? []);
+    // Output devices have coreaudio_device_output (channel count > 0)
+    const outputDevices = allDevices.filter(d => d.coreaudio_device_output != null);
+    const devices = outputDevices.map(d => d._name).filter(Boolean);
+    const current = allDevices.find(d => d.coreaudio_default_audio_output_device === 'spaudio_yes')?._name ?? '';
+    res.json({ devices, current, switchUnavailable: true });
   } catch (err) {
-    res.status(500).json({ error: `SwitchAudioSource not available: ${err.message}` });
+    res.status(500).json({ error: `Audio device listing unavailable: ${err.message}` });
   }
 });
 
@@ -395,7 +410,6 @@ router.post('/sys-select', async (req, res) => {
   const { name } = req.body ?? {};
   try {
     if (!name) {
-      // restore
       if (sysOrigDevice) {
         await execFileAsync(SWITCHAUDIO, ['-s', sysOrigDevice, '-t', 'output']);
         console.log(`[AirPlay] Restored system audio → "${sysOrigDevice}"`);
@@ -403,18 +417,20 @@ router.post('/sys-select', async (req, res) => {
       }
       return res.json({ ok: true, current: null });
     }
-
-    // save original if not already saved
     if (!sysOrigDevice) {
       const { stdout } = await execFileAsync(SWITCHAUDIO, ['-c', '-t', 'output']);
       sysOrigDevice = stdout.trim();
     }
-
     await execFileAsync(SWITCHAUDIO, ['-s', name, '-t', 'output']);
     console.log(`[AirPlay] System audio → "${name}" (orig="${sysOrigDevice}")`);
     res.json({ ok: true, current: name });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const isMissing = err.code === 'ENOENT';
+    res.status(isMissing ? 501 : 500).json({
+      error: isMissing
+        ? 'SwitchAudioSource not installed — run: brew install switchaudio-osx'
+        : err.message,
+    });
   }
 });
 

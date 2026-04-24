@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import { config as dotenvConfig } from 'dotenv';
 import express from 'express';
 import expressWs from 'express-ws';
 import path from 'path';
@@ -7,9 +7,21 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Ensure required dirs exist before any module touches them
-fs.mkdirSync(path.join(__dirname, 'tts-cache'), { recursive: true });
-fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
+// Load .env using an absolute path so it works whether cwd is '/', the home
+// directory, or anywhere else (as happens when launched from Finder/Electron).
+const result = dotenvConfig({ path: path.join(__dirname, '.env') });
+if (result.error) {
+  console.warn('[Server] .env not found at', path.join(__dirname, '.env'), '— using existing process.env');
+} else {
+  console.log('[Server] .env loaded from', path.join(__dirname, '.env'));
+}
+
+// Ensure required dirs exist before any module touches them.
+// In Electron, SEENS_DATA_DIR points to ~/Library/Application Support/seens-radio/
+const DATA_DIR    = process.env.SEENS_DATA_DIR ?? path.join(__dirname, 'data');
+const TTS_DIR     = process.env.SEENS_DATA_DIR ? path.join(process.env.SEENS_DATA_DIR, 'tts-cache') : path.join(__dirname, 'tts-cache');
+fs.mkdirSync(DATA_DIR,  { recursive: true });
+fs.mkdirSync(TTS_DIR,   { recursive: true });
 fs.mkdirSync(path.join(__dirname, 'USER'), { recursive: true });
 
 const app = express();
@@ -27,7 +39,7 @@ app.use((req, res, next) => {
 
 // ─── Static files ─────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/tts', express.static(path.join(__dirname, 'tts-cache')));
+app.use('/tts', express.static(TTS_DIR));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const { default: streamAudioRoute }  = await import('./routes/stream-audio.js');
@@ -154,6 +166,44 @@ app.get('/callback/microsoft', async (req, res) => {
     await exchangeCode(code);
     res.send('<h2>✓ Microsoft Calendar connected!</h2><script>window.close()</script>');
   } catch (err) { res.send(`<h2>Error: ${err.message}</h2>`); }
+});
+
+// Location detection — timezone-based (primary) with IP fallback.
+// Primary: derive city from the OS system timezone (e.g. "America/Los_Angeles" → "Los Angeles").
+// No external API, no GPS, no permissions — just reads the local clock zone.
+function cityFromTimezone(tz) {
+  if (!tz || !tz.includes('/')) return null;
+  const parts = tz.split('/');
+  // Use the most specific segment (last part handles "America/Indiana/Indianapolis")
+  const rawCity = parts[parts.length - 1].replace(/_/g, ' ');
+  // Map IANA area prefix → country hint for common regions
+  const areaCountry = {
+    America: 'US', US: 'US', Canada: 'Canada',
+    Europe: '', Africa: '', Asia: '', Pacific: '',
+    Australia: 'Australia', Atlantic: '', Indian: '', Arctic: '', Antarctica: '',
+  };
+  const country = areaCountry[parts[0]] ?? '';
+  return country ? `${rawCity}, ${country}` : rawCity;
+}
+
+app.get('/api/location', async (req, res) => {
+  // Primary: system timezone — accurate to the right city, zero dependencies
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const city = cityFromTimezone(tz);
+    if (city) return res.json({ city, source: 'timezone', timezone: tz });
+  } catch {}
+
+  // Fallback: IP geolocation (less accurate but better than nothing)
+  try {
+    const r = await fetch('http://ip-api.com/json/?fields=status,city,regionName,country,lat,lon');
+    const data = await r.json();
+    if (data.status === 'success') {
+      return res.json({ city: data.city, region: data.regionName, country: data.country, lat: data.lat, lon: data.lon, source: 'ip' });
+    }
+  } catch {}
+
+  res.status(503).json({ error: 'Location detection unavailable' });
 });
 
 // SPA fallback
