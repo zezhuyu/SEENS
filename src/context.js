@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getRecentMessages, getRecentPlays, getPref } from './state.js';
 import { getWeatherContext } from './weather.js';
+import { readUserFile } from './paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -44,10 +45,10 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
   const persona = readFile('prompts/dj-persona.md');
 
   // Fragment 2 — User Taste (cap at 2000 chars to keep prompts fast)
-  const tasteRaw = readFile('USER/taste.md') || '(No taste profile yet — ask the user about their music preferences)';
+  const tasteRaw = readUserFile('taste.md') || '(No taste profile yet — ask the user about their music preferences)';
   const taste = tasteRaw.length > 2000 ? tasteRaw.slice(0, 2000) + '\n...(truncated)' : tasteRaw;
-  const routines = readFile('USER/routines.md');
-  const moodRules = readFile('USER/mood-rules.md');
+  const routines = readUserFile('routines.md');
+  const moodRules = readUserFile('mood-rules.md');
 
   // Fragment 3 — Environment (time, day, season, variety seed)
   const now = new Date();

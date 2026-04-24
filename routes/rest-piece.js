@@ -1,10 +1,5 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, '..');
+import { readUserFile } from '../src/paths.js';
 
 const router = express.Router();
 
@@ -22,8 +17,7 @@ const CATEGORY_GRADIENTS = {
 const ALL_CATS = Object.keys(CATEGORY_GRADIENTS);
 
 function readPrefs() {
-  try { return fs.readFileSync(path.join(ROOT, 'USER/rest-preferences.md'), 'utf8'); }
-  catch { return ''; }
+  return readUserFile('rest-preferences.md');
 }
 
 // Try multiple Wikipedia article titles until one returns an image

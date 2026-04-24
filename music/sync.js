@@ -1,11 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { getPref } from '../src/state.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, '..');
-const USER_DIR = path.join(ROOT, 'USER');
+import { ensureUserDir, userPath } from '../src/paths.js';
 
 const MIN_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
@@ -28,11 +24,11 @@ export async function syncAll({ force = false } = {}) {
   const allTracks = [...results.spotify, ...results.youtube, ...results.apple];
   const deduped = deduplicateTracks(allTracks);
 
-  fs.mkdirSync(USER_DIR, { recursive: true });
-  fs.writeFileSync(path.join(USER_DIR, 'playlists.json'), JSON.stringify(deduped, null, 2));
+  ensureUserDir();
+  fs.writeFileSync(userPath('playlists.json'), JSON.stringify(deduped, null, 2));
 
   const taste = generateTasteProfile(results);
-  fs.writeFileSync(path.join(USER_DIR, 'taste.md'), taste);
+  fs.writeFileSync(userPath('taste.md'), taste);
 
   const { setPref } = await import('../src/state.js');
   setPref('music.last_sync', String(Date.now()));

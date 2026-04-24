@@ -17,6 +17,9 @@ const { pathToFileURL } = require('url');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 const ROOT = path.join(__dirname, '..');
+// OAuth redirect URIs are pre-registered against the fixed PORT in .env,
+// so we must never swap to an ephemeral port in the packaged app.
+const USE_EPHEMERAL_SERVER_PORT = false;
 
 // Point all writable data (DB, tts-cache, auth tokens) to the proper user data
 // directory so writes survive app updates and aren't blocked inside the bundle.
@@ -31,7 +34,8 @@ if (_dotenvResult.error) {
   console.log('[Electron] .env loaded — PORT:', process.env.PORT, '| OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓ set' : '✗ MISSING', '| AI_AGENT:', process.env.AI_AGENT);
 }
 
-const PORT = process.env.PORT || 8080;
+let PORT = parseInt(process.env.PORT || '8080', 10);
+let serverPort = null;
 
 // Ensure Homebrew binaries (yt-dlp, ffmpeg, SwitchAudioSource) are on PATH
 // when the app is launched from Finder (which doesn't inherit the shell PATH).
@@ -53,7 +57,13 @@ function startServer() {
 function waitForServer(retries = 60) {
   return new Promise((resolve, reject) => {
     const attempt = (n) => {
-      http.get(`http://127.0.0.1:${PORT}/widget.html`, (res) => {
+      const port = serverPort || globalThis.SEENS_SERVER_PORT || PORT;
+      if (!port || port === 0) {
+        if (n > 0) return setTimeout(() => attempt(n - 1), 300);
+        return reject(new Error('server port not published'));
+      }
+
+      http.get(`http://127.0.0.1:${port}/widget.html`, (res) => {
         res.resume(); // drain response
         if (res.statusCode < 500) return resolve();
         if (n > 0) setTimeout(() => attempt(n - 1), 300);
@@ -68,7 +78,7 @@ function waitForServer(retries = 60) {
 }
 
 // ── Create widget window ──────────────────────────────────────────────────────
-function createWindow() {
+function createWindow(port = serverPort || PORT) {
   mainWindow = new BrowserWindow({
     width: 380,
     height: 700,
@@ -86,8 +96,18 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${PORT}/widget.html`);
+  mainWindow.loadURL(`http://127.0.0.1:${port}/widget.html`);
   mainWindow.show();
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('[Electron] Renderer failed to load:', errorCode, errorDescription, validatedURL);
+    createErrorWindow(`Renderer failed to load ${validatedURL}\n${errorCode}: ${errorDescription}`);
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Electron] Renderer process gone:', details);
+    createErrorWindow(`Renderer process exited: ${details.reason}`);
+  });
 
   // Permanently unlock autoplay in the renderer by dispatching a synthetic
   // click after the page loads. Chromium 130+ requires a real user-activation
@@ -117,6 +137,31 @@ function createWindow() {
   });
 }
 
+function isWindowAlive(win) {
+  return Boolean(win) && !win.isDestroyed();
+}
+
+function createErrorWindow(message) {
+  const html = `
+    <html>
+      <body style="margin:0;padding:24px;background:#f5f1e8;color:#1f1a14;font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;">
+        <h1 style="margin:0 0 12px;font-size:20px;">Seens Radio failed to start</h1>
+        <p style="margin:0 0 12px;">The local server did not come up, so the UI could not load.</p>
+        <pre style="white-space:pre-wrap;background:#fff;border:1px solid #d7d0c3;border-radius:8px;padding:12px;">${String(message).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</pre>
+      </body>
+    </html>
+  `;
+
+  mainWindow = new BrowserWindow({
+    width: 560,
+    height: 420,
+    title: 'Seens Radio Startup Error',
+    webPreferences: { contextIsolation: true },
+  });
+  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  mainWindow.show();
+}
+
 // ── Menu bar tray icon ────────────────────────────────────────────────────────
 function createTray() {
   const icon = nativeImage.createFromDataURL(
@@ -128,18 +173,18 @@ function createTray() {
   tray.setToolTip('Seens Radio');
 
   const menu = Menu.buildFromTemplate([
-    { label: 'Show', click: () => { if (mainWindow) mainWindow.show(); else createWindow(); } },
-    { label: 'Hide', click: () => mainWindow?.hide() },
+    { label: 'Show', click: () => { if (isWindowAlive(mainWindow)) mainWindow.show(); else createWindow(serverPort); } },
+    { label: 'Hide', click: () => { if (isWindowAlive(mainWindow)) mainWindow.hide(); } },
     { type: 'separator' },
-    { label: 'Open DevTools', click: () => mainWindow?.webContents.openDevTools({ mode: 'detach' }) },
+    { label: 'Open DevTools', click: () => { if (isWindowAlive(mainWindow)) mainWindow.webContents.openDevTools({ mode: 'detach' }); } },
     { type: 'separator' },
     { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
   tray.setContextMenu(menu);
   tray.on('click', () => {
-    if (mainWindow?.isVisible()) mainWindow.hide();
-    else if (mainWindow) mainWindow.show();
-    else createWindow();
+    if (isWindowAlive(mainWindow) && mainWindow.isVisible()) mainWindow.hide();
+    else if (isWindowAlive(mainWindow)) mainWindow.show();
+    else createWindow(serverPort);
   });
 }
 
@@ -162,21 +207,31 @@ app.whenReady().then(async () => {
     return { width, height };
   });
 
-  startServer();   // kicks off Express in the same process
+  if (USE_EPHEMERAL_SERVER_PORT) {
+    process.env.PORT = '0';
+    PORT = 0;
+  }
+
+  const serverLoad = startServer();   // kicks off Express in the same process
   createTray();
 
   try {
+    await serverLoad;
     await waitForServer();
-    console.log(`[Electron] Server ready on ${PORT}`);
-  } catch {
-    console.error('[Electron] Server never became ready — opening anyway');
+    serverPort = globalThis.SEENS_SERVER_PORT || parseInt(process.env.PORT || `${PORT}`, 10) || PORT;
+    PORT = serverPort;
+    console.log(`[Electron] Server ready on ${serverPort}`);
+  } catch (error) {
+    console.error('[Electron] Server never became ready:', error);
+    createErrorWindow(error.message);
+    return;
   }
 
-  createWindow();
+  createWindow(serverPort);
 });
 
 app.on('activate', () => {
-  if (!mainWindow) createWindow();
+  if (!isWindowAlive(mainWindow)) createWindow(serverPort);
   else mainWindow.show();
 });
 

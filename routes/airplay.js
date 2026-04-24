@@ -54,7 +54,6 @@ try {
 }
 
 const router  = express.Router();
-const bonjour = new Bonjour();
 
 const FFMPEG       = process.env.FFMPEG_BIN        ?? '/opt/homebrew/bin/ffmpeg';
 const SWITCHAUDIO  = process.env.SWITCH_AUDIO_BIN  ?? '/opt/homebrew/bin/SwitchAudioSource';
@@ -115,7 +114,7 @@ async function stopCurrent() {
 // GET /api/airplay/devices — 5s mDNS scan
 router.get('/devices', (req, res) => {
   const found = new Map(); // fqdn → device
-
+  const bonjour = new Bonjour();
   const browser = bonjour.find({ type: 'raop' });
   browser.on('up', svc => {
     // Strip MAC prefix (e.g. "AABBCC@Speaker Name" → "Speaker Name")
@@ -130,6 +129,7 @@ router.get('/devices', (req, res) => {
 
   setTimeout(() => {
     browser.stop();
+    bonjour.destroy();
     res.json({ devices: [...found.values()], active: activeDevice });
   }, 5000);
 });

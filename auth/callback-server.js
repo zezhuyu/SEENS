@@ -11,7 +11,7 @@ export async function runOAuthFlow(service) {
     const app = express();
     let pkceVerifier = null;
 
-    const server = app.listen(AUTH_PORT, async () => {
+    const server = app.listen(AUTH_PORT, '127.0.0.1', async () => {
       let authUrl;
       try {
         if (service === 'spotify') {

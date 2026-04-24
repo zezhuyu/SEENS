@@ -21,6 +21,12 @@ export function seedUserDirFromBundle() {
     return;
   }
 
+  // Inside an Electron asar bundle the source path looks like a file to the OS,
+  // not a real directory. fs.cpSync cannot traverse it — skip seeding in that case.
+  if (LEGACY_USER_DIR.includes('.asar')) {
+    return;
+  }
+
   fs.cpSync(LEGACY_USER_DIR, USER_DIR, {
     recursive: true,
     errorOnExist: false,

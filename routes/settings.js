@@ -1,12 +1,10 @@
 import express from 'express';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { getPref, setPref, clearQueue } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgent } from '../src/ai/index.js';
+import { ensureUserDir, userPath } from '../src/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REST_PREFS_PATH = path.join(__dirname, '../USER/rest-preferences.md');
+const REST_PREFS_PATH = userPath('rest-preferences.md');
 
 const router = express.Router();
 
@@ -75,7 +73,7 @@ router.get('/rest-prefs', (req, res) => {
 router.post('/rest-prefs', (req, res) => {
   const { content } = req.body;
   if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
-  fs.mkdirSync(path.dirname(REST_PREFS_PATH), { recursive: true });
+  ensureUserDir();
   fs.writeFileSync(REST_PREFS_PATH, content, 'utf8');
   res.json({ ok: true });
 });

@@ -4,6 +4,7 @@ import expressWs from 'express-ws';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { ensureUserDir, seedUserDirFromBundle } from './src/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,7 +23,8 @@ const DATA_DIR    = process.env.SEENS_DATA_DIR ?? path.join(__dirname, 'data');
 const TTS_DIR     = process.env.SEENS_DATA_DIR ? path.join(process.env.SEENS_DATA_DIR, 'tts-cache') : path.join(__dirname, 'tts-cache');
 fs.mkdirSync(DATA_DIR,  { recursive: true });
 fs.mkdirSync(TTS_DIR,   { recursive: true });
-fs.mkdirSync(path.join(__dirname, 'USER'), { recursive: true });
+seedUserDirFromBundle();
+ensureUserDir();
 
 const app = express();
 expressWs(app);
@@ -187,16 +189,29 @@ app.get('*', (req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '8080');
-app.listen(PORT, () => {
-  console.log(`\n🎙  Seens Radio running at http://localhost:${PORT}\n`);
+globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
+  const server = app.listen(PORT, '127.0.0.1', () => {
+    const address = server.address();
+    const actualPort = typeof address === 'object' && address ? address.port : PORT;
+    globalThis.SEENS_SERVER_PORT = actualPort;
+    process.env.PORT = String(actualPort);
+    console.log(`\n🎙  Seens Radio running at http://localhost:${actualPort}\n`);
 
-  // Start scheduler after server is up
-  import('./src/scheduler.js').then(({ startScheduler }) => startScheduler());
+    // Start scheduler after server is up
+    import('./src/scheduler.js').then(({ startScheduler }) => startScheduler());
 
-  // TTS cache pruning once a day
-  import('./src/tts.js').then(({ pruneCache }) => {
-    pruneCache();
-    setInterval(pruneCache, 24 * 60 * 60 * 1000);
+    // TTS cache pruning once a day
+    import('./src/tts.js').then(({ pruneCache }) => {
+      pruneCache();
+      setInterval(pruneCache, 24 * 60 * 60 * 1000);
+    });
+
+    resolve(actualPort);
+  });
+
+  server.on('error', (err) => {
+    console.error('[Server] listen failed:', err);
+    reject(err);
   });
 });
 
