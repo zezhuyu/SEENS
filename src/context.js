@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getRecentMessages, getRecentPlays, getPref } from './state.js';
+import { getRecentMessages, getRecentPlays, getPref, getRecentSuggestions, getRecentFeedback } from './state.js';
 import { getWeatherContext } from './weather.js';
 import { readUserFile } from './paths.js';
 
@@ -79,6 +79,24 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     messages.length ? `Recent conversation:\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n') || '(No listening history yet)';
 
+  // Fragment 5b — Suggestion history (avoid repetition)
+  const pastSuggestions = getRecentSuggestions(60);
+  const suggestionHistory = pastSuggestions.length
+    ? `Tracks you have already suggested (DO NOT suggest these again — pick something fresh):\n${
+        pastSuggestions.map(s => `- ${s.title}${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
+      }`
+    : '';
+
+  // Fragment 5c — User feedback (taste signals)
+  const feedback = getRecentFeedback(40);
+  const likes    = feedback.filter(f => f.rating === 'like');
+  const dislikes = feedback.filter(f => f.rating === 'dislike');
+  const feedbackLines = [
+    likes.length    ? `Loved by user:\n${likes.map(f    => `- ${f.title}${f.artist ? ` by ${f.artist}` : ''}`).join('\n')}` : '',
+    dislikes.length ? `Disliked by user (avoid these and similar):\n${dislikes.map(f => `- ${f.title}${f.artist ? ` by ${f.artist}` : ''}`).join('\n')}` : '',
+  ].filter(Boolean).join('\n\n');
+  const feedbackSummary = feedbackLines || '';
+
   // Fragment 5 — Active agent info
   const agentPref = getPref('ai.agent', null) ?? process.env.AI_AGENT ?? 'claude';
   const agentInfo = `You are running as the ${agentPref === 'claude' ? 'Claude (Anthropic)' : 'Codex (OpenAI)'} backend.`;
@@ -98,6 +116,8 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     '## Environment\n' + env,
     calendarContext ? '## Today\'s Schedule\n' + calendarContext : '',
     '## Memory\n' + memory,
+    suggestionHistory ? '## Suggestion History\n' + suggestionHistory : '',
+    feedbackSummary   ? '## User Feedback\n'       + feedbackSummary   : '',
     '## Agent Info\n' + agentInfo,
     '## Mood State\n' + moodState,
     customPrompt ? '## Custom Instructions from User\n' + customPrompt : '',

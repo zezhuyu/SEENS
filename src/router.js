@@ -1,7 +1,7 @@
 import { generate, getActiveAgent } from './ai/index.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
-import { addMessage, enqueue, enqueueNext } from './state.js';
+import { addMessage, enqueue, enqueueNext, recordSuggestions } from './state.js';
 import { broadcast } from './ws-broadcast.js';
 import { resolveTracksOrdered } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
@@ -70,6 +70,7 @@ export async function handleInput(input, triggerType = 'user-chat') {
     resolvedTracks = resolveResult.value;
     try {
       addToQueue(resolvedTracks);
+      recordSuggestions(resolvedTracks);
       console.log(`[Router:${triggerType}] ${ts()} resolve done — ${resolvedTracks.length}/${djResponse.play?.length ?? 0} tracks (intent=${intent})`);
       prewarmCache(resolvedTracks.map(t => t.videoId));
     } catch (err) {

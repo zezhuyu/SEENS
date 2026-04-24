@@ -62,6 +62,26 @@ db.exec(`
     schedule_json TEXT NOT NULL,
     created_at    INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  -- Every track the DJ has ever suggested (used to avoid repetition)
+  CREATE TABLE IF NOT EXISTS suggestions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id     TEXT,
+    title        TEXT NOT NULL,
+    artist       TEXT NOT NULL DEFAULT '',
+    suggested_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  -- User like / dislike feedback per track (upserted by title+artist)
+  CREATE TABLE IF NOT EXISTS feedback (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id   TEXT,
+    title      TEXT NOT NULL,
+    artist     TEXT NOT NULL DEFAULT '',
+    rating     TEXT NOT NULL CHECK(rating IN ('like','dislike')),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    UNIQUE(title, artist)
+  );
 `);
 
 // ─── Migrations ───────────────────────────────────────────────────────────────
@@ -163,6 +183,46 @@ export function clearQueue() {
 // ─── Plays ────────────────────────────────────────────────────────────────────
 export function getRecentPlays(limit = 20) {
   return db.prepare('SELECT * FROM plays ORDER BY played_at DESC LIMIT ?').all(limit);
+}
+
+// ─── Suggestions ─────────────────────────────────────────────────────────────
+export function recordSuggestions(tracks) {
+  const stmt = db.prepare('INSERT INTO suggestions (video_id, title, artist) VALUES (?, ?, ?)');
+  for (const t of tracks) {
+    stmt.run(
+      t.videoId ?? t.video_id ?? null,
+      t.resolvedTitle ?? t.title,
+      t.resolvedArtist ?? t.artist ?? '',
+    );
+  }
+}
+
+// Returns deduplicated recent suggestions (latest first, by title+artist)
+export function getRecentSuggestions(limit = 60) {
+  return db.prepare(`
+    SELECT title, artist FROM (
+      SELECT title, artist, MAX(suggested_at) AS last
+      FROM suggestions
+      GROUP BY lower(title), lower(artist)
+      ORDER BY last DESC
+    ) LIMIT ?
+  `).all(limit);
+}
+
+// ─── Feedback ─────────────────────────────────────────────────────────────────
+export function recordFeedback({ videoId, title, artist, rating }) {
+  db.prepare(`
+    INSERT INTO feedback (video_id, title, artist, rating)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(title, artist) DO UPDATE
+      SET rating = excluded.rating, video_id = excluded.video_id, created_at = unixepoch()
+  `).run(videoId ?? null, title, artist ?? '', rating);
+}
+
+export function getRecentFeedback(limit = 40) {
+  return db.prepare(
+    'SELECT title, artist, rating FROM feedback ORDER BY created_at DESC LIMIT ?'
+  ).all(limit);
 }
 
 // ─── Plan ─────────────────────────────────────────────────────────────────────

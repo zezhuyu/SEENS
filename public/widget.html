@@ -180,6 +180,12 @@ body {
 .track-artist { font-size:11.5px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .track-state { font-family:var(--font-mono); font-size:9px; letter-spacing:0.16em; text-transform:uppercase; color:var(--ink-3); margin-top:2px; }
 .transport { display:flex; align-items:center; gap:4px; }
+.track-feedback { display:flex; gap:1px; flex-shrink:0; }
+.fb-btn { appearance:none; border:none; background:transparent; padding:4px; cursor:pointer; color:var(--ink-3); border-radius:4px; opacity:0.55; transition:color .15s, opacity .15s; display:grid; place-items:center; }
+.fb-btn:hover { color:var(--ink); opacity:1; }
+.fb-btn.liked { color:#e8574a; opacity:1; }
+.fb-btn.disliked { color:var(--ink-2); opacity:1; }
+.widget.mini .track-feedback { display:none; }
 .tr-btn { appearance:none; border:0; background:transparent; width:28px; height:28px; border-radius:8px; color:var(--ink-2); display:grid; place-items:center; cursor:pointer; transition:background .15s,color .15s; }
 .tr-btn:hover { background:var(--surface-2); color:var(--ink); }
 .tr-btn.play { background:var(--ink); color:var(--surface); width:30px; height:30px; }
@@ -397,6 +403,8 @@ const Icon = {
   Collapse: (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" {...p}><path d="M5 2v3H2M7 2v3h3M5 10V7H2M7 10V7h3"/></svg>,
   Close:    (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...p}><path d="M3 3l6 6M9 3l-6 6"/></svg>,
   Send:     (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M2 6l8-4-3 9-2-4-3-1z"/></svg>,
+  ThumbUp:  (p) => <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" {...p}><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>,
+  ThumbDown:(p) => <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" {...p}><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L10.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>,
   Sparkle:  (p) => <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" {...p}><path d="M5 0l.9 3.2L9 4l-3.1.9L5 8l-.9-3.1L1 4l3.1-.8z"/></svg>,
   Settings: (p) => <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" {...p}><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M3 3l1.4 1.4M9.6 9.6L11 11M3 11l1.4-1.4M9.6 4.4L11 3"/></svg>,
   Back:     (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M8 2L4 6l4 4"/></svg>,
@@ -980,6 +988,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const [playing, setPlaying]           = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [upNextTrack, setUpNextTrack]   = useState(null);
+  const [trackFeedback, setTrackFeedback] = useState(null); // null | 'like' | 'dislike'
   const [progress, setProgress]         = useState(0);
   const [timeCur, setTimeCur]           = useState('0:00');
   const [timeTotal, setTimeTotal]       = useState('0:00');
@@ -1796,6 +1805,29 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     }
   }, []);
 
+  // Reset like/dislike whenever a new track starts
+  useEffect(() => { setTrackFeedback(null); }, [currentTrack?.videoId]);
+
+  const submitFeedback = useCallback((rating) => {
+    if (!currentTrack) return;
+    setTrackFeedback(prev => {
+      const next = prev === rating ? null : rating; // toggle off if same button
+      if (next !== null) {
+        fetch('/api/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            videoId: currentTrack.videoId ?? currentTrack.video_id ?? null,
+            title:   currentTrack.resolvedTitle  ?? currentTrack.title,
+            artist:  currentTrack.resolvedArtist ?? currentTrack.artist ?? '',
+            rating:  next,
+          }),
+        }).catch(() => {});
+      }
+      return next;
+    });
+  }, [currentTrack]);
+
   const returnRest = useCallback(() => {
     setRestPhase('return');
   }, []);
@@ -1960,6 +1992,22 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
             <div className="track-artist">{trackArtist}</div>
             {upNextTrack && <div className="track-state">Up next: {upNextTrack.title}</div>}
           </div>
+          {currentTrack && size !== 'mini' && (
+            <div className="track-feedback">
+              <button
+                className={`fb-btn${trackFeedback === 'like' ? ' liked' : ''}`}
+                title="Love this"
+                onClick={() => submitFeedback('like')}>
+                <Icon.ThumbUp/>
+              </button>
+              <button
+                className={`fb-btn${trackFeedback === 'dislike' ? ' disliked' : ''}`}
+                title="Not for me"
+                onClick={() => submitFeedback('dislike')}>
+                <Icon.ThumbDown/>
+              </button>
+            </div>
+          )}
           <div className="transport">
             <button className="tr-btn" onClick={() => skipNextRef.current()} aria-label="Previous"><Icon.Prev/></button>
             <button className="tr-btn play" onClick={() => {
