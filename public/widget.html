@@ -637,13 +637,15 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
 
   const connectService = (provider) => {
     const w = window.open(`/api/auth/${provider}`, `${provider}-auth`, 'width=600,height=700,left=200,top=100');
-    if (!w) return;
+    // Poll auth-status for 60s — handles both normal popup-closed detection and
+    // Electron in-app popup windows where w.closed may not fire reliably.
+    let polls = 0;
     const poll = setInterval(() => {
-      if (w.closed) {
-        clearInterval(poll);
-        fetch('/api/settings/auth-status').then(r => r.json()).then(setAuth);
-      }
-    }, 800);
+      polls++;
+      if (polls > 30) { clearInterval(poll); return; } // stop after 60s
+      fetch('/api/settings/auth-status').then(r => r.json()).then(setAuth);
+      if (w && w.closed) clearInterval(poll);
+    }, 2000);
   };
 
   const sync = async () => {
@@ -974,7 +976,9 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const [airplayInSafari,  setAirplayInSafari]  = useState(false); // true if Safari API exists (show button)
   const [airplaySupported, setAirplaySupported] = useState(false); // true when devices are actually available
   const [airplayActive,    setAirplayActive]    = useState(false);  // true when browser is routing to AirPlay
-  const [sysAudioDevice,   setSysAudioDevice]   = useState(null);   // { name } when system audio is switched (Chrome)
+  const [sysAudioDevice,   setSysAudioDevice]   = useState(null);   // { name } when system audio is switched
+  const [raopDevice,       setRaopDevice]       = useState(null);   // { name, host, port } when RAOP streaming is active
+  const raopDeviceRef = useRef(null);
   const [electronSysPicker, setElectronSysPicker] = useState(false);   // Electron: show device dropdown
   const [electronSysDevices, setElectronSysDevices] = useState([]);     // Electron: list of macOS output devices
   const preRestSizeRef                  = useRef(size);
@@ -1007,24 +1011,45 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { categoryFilterRef.current = categoryFilter; }, [categoryFilter]);
 
-  // ── auto-detect location once on mount via server-side IP lookup (no browser permission needed)
+  // ── auto-detect location once on mount
+  // Primary: navigator.geolocation (GPS/WiFi via macOS Location Services — accurate)
+  // Fallback: server-side IP lookup
   useEffect(() => {
     fetch('/api/settings')
       .then(r => r.ok ? r.json() : null)
       .then(s => {
-        if (s?.location) return null; // already set
-        return fetch('/api/location').then(r => r.ok ? r.json() : null);
-      })
-      .then(data => {
-        if (!data || data.error) return;
-        const city = data.city || '';
-        const country = data.country || '';
-        const location = city
-          ? `${city}${country ? ', ' + country : ''}`
-          : (data.lat != null ? `${Number(data.lat).toFixed(3)},${Number(data.lon).toFixed(3)}` : '');
-        if (!location) return;
-        fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location }) })
-          .then(() => console.log('[Location] auto-detected:', location));
+        if (s?.location) return; // already saved
+
+        const saveLocation = (location) => {
+          fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location }) })
+            .then(() => console.log('[Location] auto-detected:', location));
+        };
+
+        const ipFallback = () => {
+          fetch('/api/location').then(r => r.ok ? r.json() : null).then(data => {
+            if (!data || data.error) return;
+            const city = data.city || '';
+            const country = data.country || '';
+            const loc = city ? `${city}${country ? ', ' + country : ''}` : (data.lat != null ? `${Number(data.lat).toFixed(3)},${Number(data.lon).toFixed(3)}` : '');
+            if (loc) saveLocation(loc);
+          }).catch(() => {});
+        };
+
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(({ coords }) => {
+            const { latitude: lat, longitude: lon } = coords;
+            fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, { headers: { 'User-Agent': 'SeensRadio/1.0' } })
+              .then(r => r.json())
+              .then(geo => {
+                const city = geo.address?.city || geo.address?.town || geo.address?.village || geo.address?.county || '';
+                const country = geo.address?.country || '';
+                saveLocation(city ? `${city}${country ? ', ' + country : ''}` : `${lat.toFixed(3)},${lon.toFixed(3)}`);
+              })
+              .catch(() => saveLocation(`${lat.toFixed(4)},${lon.toFixed(4)}`));
+          }, ipFallback, { timeout: 10000, maximumAge: 3600000 });
+        } else {
+          ipFallback();
+        }
       })
       .catch(() => {});
   }, []);
@@ -1307,48 +1332,53 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     if (narratedPieceRef.current === restPiece) return; // already narrated this piece
     narratedPieceRef.current = restPiece;
 
-    // Use prefetched TTS if already available for this piece
-    const cached = prefetchedRestRef.current;
-    if (cached && cached !== 'loading' && cached.piece === restPiece && cached.ttsUrl) {
-      console.log('[Narrate] using prefetched TTS:', cached.ttsUrl);
-      enqueueTTS(cached.ttsUrl);
-      prefetchedRestRef.current = null; // consumed
-      return;
-    }
-
-    // If prefetch is still in-flight, wait briefly for it then fall back to fresh fetch
-    const tryEnqueue = () => {
-      const c = prefetchedRestRef.current;
-      if (c && c !== 'loading' && c.piece === restPiece && c.ttsUrl) {
-        console.log('[Narrate] prefetch caught up:', c.ttsUrl);
-        enqueueTTS(c.ttsUrl);
-        prefetchedRestRef.current = null;
-        return true;
+    // Wait for the artwork fade-in transition (0.65s CSS) to finish before speaking
+    const revealDelay = setTimeout(() => {
+      // Use prefetched TTS if already available for this piece
+      const cached = prefetchedRestRef.current;
+      if (cached && cached !== 'loading' && cached.piece === restPiece && cached.ttsUrl) {
+        console.log('[Narrate] using prefetched TTS:', cached.ttsUrl);
+        enqueueTTS(cached.ttsUrl);
+        prefetchedRestRef.current = null; // consumed
+        return;
       }
-      return false;
-    };
 
-    // Poll briefly (up to 5s) for in-flight prefetch to complete, then fall back
-    let attempts = 0;
-    const poll = setInterval(() => {
-      attempts++;
-      if (tryEnqueue()) { clearInterval(poll); return; }
-      if (attempts >= 10) {
-        clearInterval(poll);
-        console.log('[Narrate] prefetch not ready — fetching fresh narration');
-        fetch('/api/rest-narrate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ piece: restPiece }),
-        })
-          .then(r => r.ok ? r.json() : null)
-          .then(data => {
-            if (!data?.url) { console.warn('[Narrate] no TTS url returned'); return; }
-            enqueueTTS(data.url);
+      // If prefetch is still in-flight, wait briefly for it then fall back to fresh fetch
+      const tryEnqueue = () => {
+        const c = prefetchedRestRef.current;
+        if (c && c !== 'loading' && c.piece === restPiece && c.ttsUrl) {
+          console.log('[Narrate] prefetch caught up:', c.ttsUrl);
+          enqueueTTS(c.ttsUrl);
+          prefetchedRestRef.current = null;
+          return true;
+        }
+        return false;
+      };
+
+      // Poll briefly (up to 5s) for in-flight prefetch to complete, then fall back
+      let attempts = 0;
+      const poll = setInterval(() => {
+        attempts++;
+        if (tryEnqueue()) { clearInterval(poll); return; }
+        if (attempts >= 10) {
+          clearInterval(poll);
+          console.log('[Narrate] prefetch not ready — fetching fresh narration');
+          fetch('/api/rest-narrate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ piece: restPiece }),
           })
-          .catch(err => console.warn('[Narrate] fetch error:', err.message));
-      }
-    }, 500);
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (!data?.url) { console.warn('[Narrate] no TTS url returned'); return; }
+              enqueueTTS(data.url);
+            })
+            .catch(err => console.warn('[Narrate] fetch error:', err.message));
+        }
+      }, 500);
+    }, 800); // wait for artwork fade-in to complete before speaking
+
+    return () => clearTimeout(revealDelay);
   }, [restPhase, restPiece, enqueueTTS]);
 
   const updateUpNext = useCallback((upNext) => {
@@ -1371,6 +1401,27 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     }).catch(() => {});
   }, [currentTrack?.videoId, upnpRenderer?.controlUrl]);
 
+  // Keep raopDeviceRef in sync
+  useEffect(() => { raopDeviceRef.current = raopDevice; }, [raopDevice]);
+
+  // Auto-stream to RAOP device when track changes — mirrors the UPnP pattern.
+  // Mute the local audio element while RAOP is active so audio doesn't double-play.
+  useEffect(() => {
+    if (!raopDevice || !currentTrack) return;
+    const src = currentTrack.streamUrl ?? currentTrack.stream_url ?? currentTrack.previewUrl ?? null;
+    const videoId = currentTrack.videoId ?? currentTrack.video_id ?? null;
+    if (!src && !videoId) return;
+    audioRef.current.muted = true;
+    fetch('/api/airplay/play', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(videoId ? { videoId } : { streamUrl: src }),
+        title:  currentTrack.resolvedTitle  ?? currentTrack.title  ?? '',
+        artist: currentTrack.resolvedArtist ?? currentTrack.artist ?? '',
+      }),
+    }).catch(() => {});
+  }, [currentTrack?.videoId, currentTrack?.streamUrl, currentTrack?.previewUrl, raopDevice?.host]);
 
   const playTrack = useCallback((track) => {
     setCurrentTrack(track);
@@ -1661,7 +1712,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const didPauseForBreakRef = useRef(false);
   const preBreakWindowSize  = useRef(null); // saved Electron window size before expansion
 
-  const triggerRest = useCallback(() => {
+  const triggerRest = useCallback((skipTransition = false) => {
     // Save position but don't pause — music keeps playing until we know the piece is Music
     const audio = audioRef.current;
     preBreakSrcRef.current      = audio.src ?? '';
@@ -1676,7 +1727,14 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       window.__electron__.resizeWindow(460, 820);
     }
     setResting(true);
-    setRestPhase('reveal'); // skip transition screen — go straight to artwork
+    if (skipTransition) {
+      // Manual "Take a break" — go straight to artwork
+      setRestPhase('reveal');
+    } else {
+      // Auto-triggered (timer) — show transition screen for 2.5s, then reveal artwork
+      setRestPhase('transition');
+      restPhaseTimer.current = setTimeout(() => setRestPhase('reveal'), 2500);
+    }
   }, []);
 
   const endRest = useCallback(() => {
@@ -1917,56 +1975,104 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
               </button>
             )}
             {/* Electron: active device badge — click to restore original output */}
-            {sysAudioDevice && (
+            {(sysAudioDevice || raopDevice) && (
               <button
-                title={`Audio output: ${sysAudioDevice.name} — click to restore`}
+                title={`Audio output: ${(sysAudioDevice ?? raopDevice).name} — click to stop`}
                 style={{ appearance:'none', border:'0.5px solid var(--accent)', background:'var(--accent)', color:'var(--bg)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
                 onClick={async () => {
-                  await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
-                  setSysAudioDevice(null);
+                  if (raopDevice) {
+                    // Stop RAOP streaming and unmute local audio
+                    await fetch('/api/airplay/stop', { method:'POST' }).catch(() => {});
+                    await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).catch(() => {});
+                    audioRef.current.muted = false;
+                    setRaopDevice(null);
+                  } else {
+                    await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+                    setSysAudioDevice(null);
+                  }
                 }}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                {sysAudioDevice.name} ●
+                {(sysAudioDevice ?? raopDevice).name} ●
               </button>
             )}
-            {/* Electron: AirPlay button — routes macOS system audio via SwitchAudioSource */}
-            {isElectron && !sysAudioDevice && (
+            {/* Electron: AirPlay button — local outputs (SwitchAudioSource) + network AirPlay (mDNS) */}
+            {isElectron && !sysAudioDevice && !raopDevice && (
               <div style={{ position:'relative' }}>
                 <button
                   title="Route audio to AirPlay or other output"
                   style={{ appearance:'none', border:'0.5px solid var(--accent)', background: electronSysPicker ? 'var(--accent)' : 'var(--accent-weak)', color: electronSysPicker ? 'var(--bg)' : 'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
                   onClick={async () => {
                     if (electronSysPicker) { setElectronSysPicker(false); return; }
-                    const res = await fetch('/api/airplay/sys-devices').catch(() => null);
-                    const d = res ? await res.json().catch(() => ({})) : {};
-                    setElectronSysDevices(d.error ? [{ _err: d.error }] : (d.devices ?? []).map(n => ({ name: n })));
+                    // Show immediately with scanning state, then populate
+                    setElectronSysDevices([{ _scanning: true }]);
                     setElectronSysPicker(true);
+                    // Fetch local outputs and mDNS AirPlay devices in parallel
+                    const [sysRes, apRes] = await Promise.allSettled([
+                      fetch('/api/airplay/sys-devices').then(r => r.json()),
+                      fetch('/api/airplay/devices').then(r => r.json()),
+                    ]);
+                    const sysDevs = sysRes.status === 'fulfilled' && !sysRes.value.error
+                      ? (sysRes.value.devices ?? []).map(n => ({ name: n, type: 'sys' }))
+                      : [];
+                    const apDevs = apRes.status === 'fulfilled'
+                      ? (apRes.value.devices ?? []).map(d => ({ ...d, type: 'raop' }))
+                      : [];
+                    const merged = [...apDevs, ...sysDevs];
+                    setElectronSysDevices(merged.length ? merged : [{ _empty: true }]);
                   }}>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
                   AirPlay
                 </button>
                 {electronSysPicker && (
-                  <div style={{ position:'absolute', bottom:'calc(100% + 4px)', left:0, background:'var(--surface)', border:'0.5px solid var(--line)', borderRadius:8, padding:'4px 0', minWidth:200, zIndex:200, boxShadow:'0 4px 16px rgba(0,0,0,0.25)' }}>
-                    {electronSysDevices.length === 0 && (
-                      <div style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>No output devices found</div>
-                    )}
-                    {electronSysDevices.map((dev, i) => dev._err ? (
-                      <div key={i} style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)', whiteSpace:'pre-wrap', wordBreak:'break-all' }}>
-                        Error: {dev._err}
-                      </div>
-                    ) : (
-                      <button key={dev.name}
-                        style={{ display:'block', width:'100%', textAlign:'left', padding:'6px 12px', fontSize:11, fontFamily:'var(--font-mono)', background:'none', border:'none', color:'var(--ink)', cursor:'pointer' }}
-                        onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
-                        onMouseLeave={e => e.currentTarget.style.background='none'}
-                        onClick={async () => {
-                          await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name }) });
-                          setSysAudioDevice({ name: dev.name });
-                          setElectronSysPicker(false);
-                        }}>
-                        {dev.name}
-                      </button>
-                    ))}
+                  <div style={{ position:'absolute', bottom:'calc(100% + 4px)', left:0, background:'var(--surface)', border:'0.5px solid var(--line)', borderRadius:8, padding:'4px 0', minWidth:220, zIndex:200, boxShadow:'0 4px 16px rgba(0,0,0,0.25)' }}>
+                    {electronSysDevices.map((dev, i) => {
+                      if (dev._scanning) return (
+                        <div key="scan" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>Scanning…</div>
+                      );
+                      if (dev._empty) return (
+                        <div key="empty" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>No devices found</div>
+                      );
+                      if (dev._err) return (
+                        <div key={i} style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>{dev._err}</div>
+                      );
+                      return (
+                        <button key={dev.name + dev.type}
+                          style={{ display:'block', width:'100%', textAlign:'left', padding:'6px 12px', fontSize:11, fontFamily:'var(--font-mono)', background:'none', border:'none', color:'var(--ink)', cursor:'pointer' }}
+                          onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
+                          onMouseLeave={e => e.currentTarget.style.background='none'}
+                          onClick={async () => {
+                            if (dev.type === 'raop') {
+                              // Try sys-select first: if SwitchAudioSource is installed and the device
+                              // is a CoreAudio output, this routes ALL audio with zero extra work.
+                              const sysRes = await fetch('/api/airplay/sys-select', {
+                                method:'POST', headers:{'Content-Type':'application/json'},
+                                body: JSON.stringify({ name: dev.name }),
+                              }).then(r => r.json()).catch(() => null);
+
+                              if (sysRes?.ok) {
+                                setSysAudioDevice({ name: dev.name });
+                                // macOS needs ~800ms to switch CoreAudio output — then resume
+                                setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
+                              } else {
+                                // Fallback: server-side RAOP streaming via airtunes2
+                                await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name, host: dev.host, port: dev.port }) });
+                                setRaopDevice({ name: dev.name, host: dev.host, port: dev.port });
+                                // The raopDevice useEffect will fire immediately and start streaming
+                              }
+                            } else {
+                              const r = await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name }) });
+                              if ((await r.json().catch(() => ({}))).ok) {
+                                setSysAudioDevice({ name: dev.name });
+                                setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
+                              }
+                            }
+                            setElectronSysPicker(false);
+                          }}>
+                          <span style={{ fontSize:9, opacity:0.5, marginRight:4 }}>{dev.type === 'raop' ? '📡' : '🔊'}</span>
+                          {dev.name}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -2060,7 +2166,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         <span>SEENS · FM</span>
         <div style={{ display:'flex', gap:12 }}>
           {started && <button className="rest-trigger" onClick={exitSession} style={{ transition:'color .15s' }} onMouseEnter={e => e.currentTarget.style.color='oklch(0.65 0.18 25)'} onMouseLeave={e => e.currentTarget.style.color=''}>End session</button>}
-          <button className="rest-trigger" onClick={triggerRest}>Take a break →</button>
+          <button className="rest-trigger" onClick={() => triggerRest(true)}>Take a break →</button>
         </div>
       </div>
 

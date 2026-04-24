@@ -131,19 +131,24 @@ router.post('/select', async (req, res) => {
   res.json({ ok: true, active: activeDevice.name });
 });
 
-// POST /api/airplay/play — { videoId, title, artist }
+// POST /api/airplay/play — { videoId?, streamUrl?, title, artist }
+// Accepts either a YouTube videoId (resolved via yt-dlp) or a direct streamUrl.
 router.post('/play', async (req, res) => {
   if (!activeDevice) return res.status(400).json({ error: 'No AirPlay device selected' });
-  const { videoId, title, artist } = req.body ?? {};
-  if (!videoId) return res.status(400).json({ error: 'videoId required' });
+  const { videoId, streamUrl, title, artist } = req.body ?? {};
+  if (!videoId && !streamUrl) return res.status(400).json({ error: 'videoId or streamUrl required' });
 
-  console.log(`[AirPlay] play request: "${title ?? videoId}" on ${activeDevice.host}:${activeDevice.port}`);
+  console.log(`[AirPlay] play request: "${title ?? videoId ?? streamUrl}" on ${activeDevice.host}:${activeDevice.port}`);
 
   let audioUrl;
-  try {
-    audioUrl = await getAudioUrl(videoId);
-  } catch (err) {
-    return res.status(502).json({ error: `Could not resolve audio: ${err.message}` });
+  if (streamUrl) {
+    audioUrl = streamUrl;
+  } else {
+    try {
+      audioUrl = await getAudioUrl(videoId);
+    } catch (err) {
+      return res.status(502).json({ error: `Could not resolve audio: ${err.message}` });
+    }
   }
 
   try {
@@ -405,32 +410,66 @@ router.get('/sys-devices', async (req, res) => {
   }
 });
 
+// ── macOS audio switching helpers ─────────────────────────────────────────────
+// osascript works on any Mac without extra installs; SwitchAudioSource is faster.
+async function getCurrentDeviceViaOsascript() {
+  const { stdout } = await execFileAsync('osascript', [
+    '-e', 'tell application "System Events" to tell sound preferences to get output device',
+  ]);
+  return stdout.trim();
+}
+
+async function switchDeviceViaOsascript(deviceName) {
+  // Escape any quotes in the device name
+  const safe = deviceName.replace(/"/g, '\\"');
+  await execFileAsync('osascript', [
+    '-e', `tell application "System Events" to tell sound preferences to set output device to "${safe}"`,
+  ]);
+}
+
 // POST /api/airplay/sys-select — { name } to switch, {} to restore original
 router.post('/sys-select', async (req, res) => {
   const { name } = req.body ?? {};
   try {
     if (!name) {
+      // Restore original device
       if (sysOrigDevice) {
-        await execFileAsync(SWITCHAUDIO, ['-s', sysOrigDevice, '-t', 'output']);
-        console.log(`[AirPlay] Restored system audio → "${sysOrigDevice}"`);
+        const orig = sysOrigDevice;
         sysOrigDevice = null;
+        try {
+          await execFileAsync(SWITCHAUDIO, ['-s', orig, '-t', 'output']);
+        } catch {
+          await switchDeviceViaOsascript(orig);
+        }
+        console.log(`[AirPlay] Restored system audio → "${orig}"`);
       }
       return res.json({ ok: true, current: null });
     }
+
+    // Save original device before first switch
     if (!sysOrigDevice) {
-      const { stdout } = await execFileAsync(SWITCHAUDIO, ['-c', '-t', 'output']);
-      sysOrigDevice = stdout.trim();
+      try {
+        const { stdout } = await execFileAsync(SWITCHAUDIO, ['-c', '-t', 'output']);
+        sysOrigDevice = stdout.trim();
+      } catch {
+        try { sysOrigDevice = await getCurrentDeviceViaOsascript(); } catch { sysOrigDevice = ''; }
+      }
     }
-    await execFileAsync(SWITCHAUDIO, ['-s', name, '-t', 'output']);
+
+    // Switch — try SwitchAudioSource, fall back to osascript
+    try {
+      await execFileAsync(SWITCHAUDIO, ['-s', name, '-t', 'output']);
+    } catch (swErr) {
+      if (swErr.code !== 'ENOENT') throw swErr; // unexpected error
+      // SwitchAudioSource not installed — use osascript
+      await switchDeviceViaOsascript(name);
+    }
+
     console.log(`[AirPlay] System audio → "${name}" (orig="${sysOrigDevice}")`);
     res.json({ ok: true, current: name });
   } catch (err) {
-    const isMissing = err.code === 'ENOENT';
-    res.status(isMissing ? 501 : 500).json({
-      error: isMissing
-        ? 'SwitchAudioSource not installed — run: brew install switchaudio-osx'
-        : err.message,
-    });
+    console.error('[AirPlay] sys-select error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

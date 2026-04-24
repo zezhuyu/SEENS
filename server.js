@@ -168,41 +168,15 @@ app.get('/callback/microsoft', async (req, res) => {
   } catch (err) { res.send(`<h2>Error: ${err.message}</h2>`); }
 });
 
-// Location detection — timezone-based (primary) with IP fallback.
-// Primary: derive city from the OS system timezone (e.g. "America/Los_Angeles" → "Los Angeles").
-// No external API, no GPS, no permissions — just reads the local clock zone.
-function cityFromTimezone(tz) {
-  if (!tz || !tz.includes('/')) return null;
-  const parts = tz.split('/');
-  // Use the most specific segment (last part handles "America/Indiana/Indianapolis")
-  const rawCity = parts[parts.length - 1].replace(/_/g, ' ');
-  // Map IANA area prefix → country hint for common regions
-  const areaCountry = {
-    America: 'US', US: 'US', Canada: 'Canada',
-    Europe: '', Africa: '', Asia: '', Pacific: '',
-    Australia: 'Australia', Atlantic: '', Indian: '', Arctic: '', Antarctica: '',
-  };
-  const country = areaCountry[parts[0]] ?? '';
-  return country ? `${rawCity}, ${country}` : rawCity;
-}
-
+// IP-based geolocation fallback (used when browser geolocation is unavailable)
 app.get('/api/location', async (req, res) => {
-  // Primary: system timezone — accurate to the right city, zero dependencies
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const city = cityFromTimezone(tz);
-    if (city) return res.json({ city, source: 'timezone', timezone: tz });
-  } catch {}
-
-  // Fallback: IP geolocation (less accurate but better than nothing)
   try {
     const r = await fetch('http://ip-api.com/json/?fields=status,city,regionName,country,lat,lon');
     const data = await r.json();
     if (data.status === 'success') {
-      return res.json({ city: data.city, region: data.regionName, country: data.country, lat: data.lat, lon: data.lon, source: 'ip' });
+      return res.json({ city: data.city, region: data.regionName, country: data.country, lat: data.lat, lon: data.lon });
     }
   } catch {}
-
   res.status(503).json({ error: 'Location detection unavailable' });
 });
 

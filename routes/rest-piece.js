@@ -43,6 +43,29 @@ async function fetchWikiImage(candidates) {
   return null;
 }
 
+// Broader fallback: Wikipedia full-text search with pageimages — works for obscure works
+// where the exact article title isn't known or has no thumbnail in page/summary.
+async function fetchWikiImageSearch(query) {
+  if (!query?.trim()) return null;
+  try {
+    const params = new URLSearchParams({
+      action: 'query', format: 'json', origin: '*',
+      generator: 'search', gsrsearch: query.trim(), gsrlimit: '5',
+      prop: 'pageimages', pithumbsize: '800',
+    });
+    const res = await fetch(`https://en.wikipedia.org/w/api.php?${params}`, {
+      headers: { 'User-Agent': 'SeensRadio/1.0' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const pages = Object.values(data.query?.pages ?? {});
+    for (const page of pages) {
+      if (page.thumbnail?.source) return page.thumbnail.source;
+    }
+  } catch {}
+  return null;
+}
+
 router.get('/', async (req, res) => {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return res.status(500).json({ error: 'OPENAI_API_KEY not set' });
@@ -119,12 +142,16 @@ Guidelines:
     };
     const disambigs = (wikiDisambig[piece.cat] ?? []).map(s => `${piece.title} ${s}`);
 
-    const imageUrl = await fetchWikiImage([
+    let imageUrl = await fetchWikiImage([
       piece.wikiTitle,              // AI-provided exact title (most reliable)
       piece.title,                  // bare title
       ...disambigs,                 // category-specific disambiguations
       piece.artist,                 // artist's own Wikipedia page as portrait fallback
     ]);
+
+    // Broader fallback: Wikipedia full-text search — catches obscure/disambiguated articles
+    if (!imageUrl) imageUrl = await fetchWikiImageSearch(`${piece.title} ${piece.artist}`);
+    if (!imageUrl) imageUrl = await fetchWikiImageSearch(piece.title);
 
     if (!imageUrl) console.warn(`[RestPiece] No image found for "${piece.title}"`);
 

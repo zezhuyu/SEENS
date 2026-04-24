@@ -101,6 +101,17 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // OAuth popups (localhost URLs) must open inside Electron so the /callback/* redirect
+    // lands back on the local server and window.close() is detectable by the opener.
+    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 620, height: 720,
+          webPreferences: { nodeIntegration: false, contextIsolation: true },
+        },
+      };
+    }
     shell.openExternal(url);
     return { action: 'deny' };
   });
