@@ -38,13 +38,20 @@ function getLanIp() {
 
 const execFileAsync = promisify(execFile);
 
-const require      = createRequire(import.meta.url);
-const AirTunes     = require('airtunes2');
-const airtunes     = new AirTunes();
+const require = createRequire(import.meta.url);
+let airtunes = null;
+let airtunesLoadError = null;
 
-airtunes.on('device', (key, status, desc) => {
-  console.log(`[AirPlay] device ${key}: ${status}${desc ? ' — ' + desc : ''}`);
-});
+try {
+  const AirTunes = require('airtunes2');
+  airtunes = new AirTunes();
+  airtunes.on('device', (key, status, desc) => {
+    console.log(`[AirPlay] device ${key}: ${status}${desc ? ' — ' + desc : ''}`);
+  });
+} catch (error) {
+  airtunesLoadError = error;
+  console.warn(`[AirPlay] airtunes2 unavailable: ${error.message}`);
+}
 
 const router  = express.Router();
 const bonjour = new Bonjour();
@@ -58,8 +65,19 @@ let nowPlaying    = null;  // { videoId, title, artist }
 let currentFfmpeg = null;  // ChildProcess
 let sysOrigDevice = null;  // macOS output before sys-select (restored on deselect)
 
+function requireAirTunes(res) {
+  if (airtunes) return true;
+  res.status(503).json({
+    error: 'RAOP/AirPlay streaming is unavailable because the optional airtunes2 native module is not installed.',
+    detail: airtunesLoadError?.message ?? null,
+  });
+  return false;
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 async function stopCurrent() {
+  if (!airtunes) return;
+
   const ff = currentFfmpeg;
   currentFfmpeg = null;
   if (ff) {
@@ -118,6 +136,7 @@ router.get('/devices', (req, res) => {
 
 // POST /api/airplay/select — { name, host, port } or {} to deselect
 router.post('/select', async (req, res) => {
+  if (!requireAirTunes(res)) return;
   const { name, host, port } = req.body ?? {};
   if (!host) {
     await stopCurrent();
@@ -134,6 +153,7 @@ router.post('/select', async (req, res) => {
 // POST /api/airplay/play — { videoId?, streamUrl?, title, artist }
 // Accepts either a YouTube videoId (resolved via yt-dlp) or a direct streamUrl.
 router.post('/play', async (req, res) => {
+  if (!requireAirTunes(res)) return;
   if (!activeDevice) return res.status(400).json({ error: 'No AirPlay device selected' });
   const { videoId, streamUrl, title, artist } = req.body ?? {};
   if (!videoId && !streamUrl) return res.status(400).json({ error: 'videoId or streamUrl required' });
@@ -220,6 +240,7 @@ router.post('/play', async (req, res) => {
 
 // POST /api/airplay/stop
 router.post('/stop', async (req, res) => {
+  if (!requireAirTunes(res)) return;
   try {
     await stopCurrent();
     nowPlaying = null;
@@ -231,7 +252,12 @@ router.post('/stop', async (req, res) => {
 
 // GET /api/airplay/status
 router.get('/status', (req, res) => {
-  res.json({ device: activeDevice, nowPlaying });
+  res.json({
+    device: activeDevice,
+    nowPlaying,
+    available: Boolean(airtunes),
+    error: airtunesLoadError?.message ?? null,
+  });
 });
 
 // GET /api/airplay/host — LAN base URL so the widget can build device-reachable stream URLs
