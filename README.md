@@ -256,6 +256,90 @@ This builds `dist/mac-arm64/Seens Radio.app`. Copy it to `/Applications` or doub
 
 ---
 
+## Notifications
+
+Seens Radio has a built-in notification system. A toast appears at the top-right of the widget and an entry is added to the bell-icon panel. The bell badge shows the unread count; clicking it opens the full list.
+
+### How it works
+
+The Express server exposes a localhost-only endpoint:
+
+```
+POST http://localhost:7477/api/notify
+```
+
+Payload:
+
+```json
+{
+  "title":   "Short headline",
+  "message": "One to three sentences explaining what happened.",
+  "type":    "info",
+  "link":    "https://optional-url.com"
+}
+```
+
+| Field | Required | Values |
+|---|---|---|
+| `title` | yes | under 60 characters |
+| `message` | yes | 1–3 sentences |
+| `type` | no | `info` (blue) · `success` (green) · `warning` (amber) · `error` (red) |
+| `link` | no | URL opened when the user clicks the notification in the panel |
+
+The server broadcasts the notification over WebSocket to all open widget tabs. The toast stays visible for 8 seconds (or until the user closes it with ×) and a chime plays on delivery.
+
+---
+
+## Claude Code notification skill
+
+The `skills/` folder contains an MCP server that lets Claude Code send notifications to the widget directly — no manual `curl` needed.
+
+### Install
+
+Run once from the repo root:
+
+```bash
+claude mcp add seens-notify -- node "$(pwd)/skills/seens-notify-mcp.js"
+```
+
+Or, if you have `.mcp.json` and `enableAllProjectMcpServers: true` in `.claude/settings.local.json` (already set in this repo), the skill is wired up automatically when you open the project in Claude Code.
+
+### Use in Claude Code
+
+Ask Claude to send a notification:
+
+> "notify me when the build finishes"
+> "send me a warning that my Spotify token expires today"
+
+Claude will call the `notify` tool with an appropriate title, message, and severity level. The tool auto-detects the widget port and delivers the notification in one step.
+
+### Manual test
+
+```bash
+node -e "
+const { spawn } = require('child_process');
+const child = spawn('node', ['skills/seens-notify-mcp.js'], { stdio: ['pipe','pipe','pipe'] });
+child.stdout.on('data', d => console.log(d.toString().trim()));
+const send = msg => child.stdin.write(JSON.stringify(msg) + '\n');
+send({ jsonrpc:'2.0', id:1, method:'initialize', params:{ protocolVersion:'2024-11-05', capabilities:{}, clientInfo:{name:'test',version:'1.0'} } });
+send({ jsonrpc:'2.0', method:'notifications/initialized', params:{} });
+setTimeout(() => {
+  send({ jsonrpc:'2.0', id:2, method:'tools/call', params:{ name:'notify', arguments:{ title:'Test notification', message:'The skill is working.', type:'success' } } });
+  setTimeout(() => child.stdin.end(), 3000);
+}, 500);
+"
+```
+
+### Fallback (curl)
+
+```bash
+curl -s -X POST http://localhost:7477/api/notify \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Hello","message":"Notification from curl.","type":"info"}'
+```
+
+---
+
 ## Personalising the DJ
 
 Edit the files in the `USER/` folder — the DJ reads them at the start of every session:
@@ -266,6 +350,7 @@ Edit the files in the `USER/` folder — the DJ reads them at the start of every
 | `USER/routines.md` | Your daily schedule (morning workout, lunch break, evening wind-down) |
 | `USER/mood-rules.md` | Rules for the DJ (e.g. "no vocals before 9am", "upbeat on Mondays") |
 | `USER/rest-preferences.md` | Preferences for the cultural rest-break feature |
+| `USER/story-interests.md` | Topics used to fetch live Hacker News stories for the Story rest-break category (one bullet per topic) |
 
 You can also sync your Spotify/Apple Music/YouTube library to auto-populate `taste.md`:
 

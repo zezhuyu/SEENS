@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "seens-notify": {
+      "command": "node",
+      "args": [".claude/seens-notify-mcp.js"]
+    }
+  }
+}

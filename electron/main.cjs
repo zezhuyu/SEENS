@@ -82,7 +82,7 @@ function createWindow(port = serverPort || PORT) {
   mainWindow = new BrowserWindow({
     width: 380,
     height: 700,
-    minWidth: 300,
+    minWidth: 380,
     minHeight: 320,
     frame: false,
     transparent: false,

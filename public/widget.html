@@ -289,7 +289,8 @@ body {
 .art-body::-webkit-scrollbar-thumb { background:var(--line); border-radius:999px; }
 .art-rest-note { font-family:var(--font-mono); font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color:var(--accent); display:flex; align-items:center; gap:6px; }
 .art-title { font-size:22px; font-weight:500; letter-spacing:-0.015em; color:var(--ink); line-height:1.15; text-wrap:balance; }
-.art-meta { font-size:12px; color:var(--ink-2); font-family:var(--font-mono); }
+.art-meta { font-size:12px; color:var(--ink-2); font-family:var(--font-mono); display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.art-source { display:inline-flex; align-items:center; gap:4px; background:var(--surface-2); border:0.5px solid var(--line); border-radius:999px; padding:2px 8px; font-size:9.5px; letter-spacing:0.06em; color:var(--ink-2); white-space:nowrap; }
 .art-caption { font-size:13px; line-height:1.55; color:var(--ink); text-wrap:pretty; }
 .art-fact { border-left:2px solid var(--accent); padding:6px 0 6px 12px; font-size:12px; line-height:1.55; color:var(--ink-2); }
 .art-fact::before { content:'Did you know'; display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:0.14em; text-transform:uppercase; color:var(--accent); margin-bottom:3px; }
@@ -361,6 +362,36 @@ body {
 .typing-dots span:nth-child(2) { animation-delay:0.2s; }
 .typing-dots span:nth-child(3) { animation-delay:0.4s; }
 @keyframes typingBlink { 0%,60%,100%{opacity:0.3;} 30%{opacity:1;} }
+
+/* ── Notifications ─────────────────────────────────────────────────────── */
+.notif-wrap { position:relative; }
+.notif-badge { position:absolute; top:-4px; right:-4px; min-width:14px; height:14px; background:var(--accent); color:#fff; font-size:9px; font-weight:700; border-radius:7px; display:flex; align-items:center; justify-content:center; padding:0 3px; pointer-events:none; }
+.notif-panel { position:absolute; top:calc(100% + 6px); right:0; width:280px; max-height:380px; background:var(--surface); border:0.5px solid var(--line); border-radius:12px; box-shadow:var(--shadow); z-index:200; display:flex; flex-direction:column; overflow:hidden; }
+.notif-panel-hdr { display:flex; align-items:center; justify-content:space-between; padding:11px 13px 9px; border-bottom:0.5px solid var(--line-soft); flex-shrink:0; }
+.notif-panel-title { font-size:11px; font-weight:600; color:var(--ink); letter-spacing:.04em; text-transform:uppercase; }
+.notif-clear { font-size:10px; color:var(--ink-3); background:none; border:none; cursor:pointer; padding:2px 4px; border-radius:4px; }
+.notif-clear:hover { color:var(--ink-2); background:var(--surface-2); }
+.notif-list { overflow-y:auto; flex:1; }
+.notif-empty { padding:28px 16px; text-align:center; font-size:11px; color:var(--ink-3); }
+.notif-item { padding:11px 13px; border-bottom:0.5px solid var(--line-soft); display:flex; gap:9px; transition:background .12s; }
+.notif-item:last-child { border-bottom:none; }
+.notif-item:hover { background:var(--surface-2); }
+.notif-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; margin-top:4px; }
+.notif-dot.info    { background:#60a5fa; }
+.notif-dot.success { background:var(--accent); }
+.notif-dot.warning { background:#f59e0b; }
+.notif-dot.error   { background:#ef4444; }
+.notif-body { flex:1; min-width:0; }
+.notif-item-title { font-size:11px; font-weight:600; color:var(--ink); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.notif-item-msg { font-size:11px; color:var(--ink-2); line-height:1.45; }
+.notif-item-time { font-size:9px; color:var(--ink-3); margin-top:3px; font-family:var(--font-mono); }
+.notif-toast { position:fixed; top:48px; right:16px; max-width:288px; min-width:220px; background:var(--surface); border:0.5px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:11px 13px; display:flex; gap:9px; align-items:flex-start; z-index:400; animation:notifSlideDown .22s ease; }
+@keyframes notifSlideDown { from{transform:translateY(-12px);opacity:0;} to{transform:translateY(0);opacity:1;} }
+.notif-toast-body { flex:1; min-width:0; }
+.notif-toast-title { font-size:11px; font-weight:600; color:var(--ink); margin-bottom:2px; }
+.notif-toast-msg { font-size:11px; color:var(--ink-2); line-height:1.4; }
+.notif-toast-close { flex-shrink:0; background:none; border:none; color:var(--ink-3); cursor:pointer; padding:0; line-height:1; display:flex; align-items:center; }
+.notif-toast-close:hover { color:var(--ink); }
 </style>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
@@ -408,6 +439,7 @@ const Icon = {
   Sparkle:  (p) => <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" {...p}><path d="M5 0l.9 3.2L9 4l-3.1.9L5 8l-.9-3.1L1 4l3.1-.8z"/></svg>,
   Settings: (p) => <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" {...p}><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M3 3l1.4 1.4M9.6 9.6L11 11M3 11l1.4-1.4M9.6 4.4L11 3"/></svg>,
   Back:     (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M8 2L4 6l4 4"/></svg>,
+  Bell:     (p) => <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M7 1.5a4 4 0 0 1 4 4c0 2.8 1.2 3.8 1.5 4.5H1.5c.3-.7 1.5-1.7 1.5-4.5a4 4 0 0 1 4-4z"/><path d="M5.8 10.5a1.2 1.2 0 0 0 2.4 0"/></svg>,
 };
 
 // ── BreakTransition ──────────────────────────────────────────────────────────
@@ -547,7 +579,10 @@ function ArtReveal({ piece, loading, onDismiss, onReturn, onNext }) {
           </div>
           <div>
             <div className="art-title">{piece.title}</div>
-            <div className="art-meta">{piece.artist} · {piece.year}</div>
+            <div className="art-meta">
+              <span>{piece.artist} · {piece.year}</span>
+              {piece.source && <span className="art-source">{piece.source}</span>}
+            </div>
           </div>
           <div className="art-caption">{piece.caption}</div>
           {piece.story && <div className="art-caption" style={{ color:'var(--ink-2)', fontSize:'12px' }}>{piece.story}</div>}
@@ -561,6 +596,17 @@ function ArtReveal({ piece, loading, onDismiss, onReturn, onNext }) {
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 19.104c-3.924 0-7.104-3.18-7.104-7.104S8.076 4.896 12 4.896s7.104 3.18 7.104 7.104-3.18 7.104-7.104 7.104zm0-13.332c-3.432 0-6.228 2.796-6.228 6.228S8.568 18.228 12 18.228s6.228-2.796 6.228-6.228S15.432 5.772 12 5.772zM9.684 15.54V8.46L15.816 12l-6.132 3.54z"/></svg>
               Listen on YouTube Music
+            </a>
+          )}
+          {piece.cat === 'Story' && piece.url && (
+            <a
+              href={piece.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display:'flex', alignItems:'center', gap:6, padding:'8px 12px', borderRadius:10, background:'var(--accent-weak)', color:'var(--accent)', fontSize:12, fontWeight:500, textDecoration:'none', border:'0.5px solid var(--accent)', width:'fit-content' }}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6h8M6 2l4 4-4 4"/></svg>
+              Read full story
             </a>
           )}
           <div className="art-actions">
@@ -613,9 +659,10 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [upnpDevices,      setUpnpDevices]      = useState([]);
   const [upnpScanning,     setUpnpScanning]     = useState(false);
   const [upnpRenderer,     setUpnpRenderer]     = useState(null); // { name, controlUrl }
-  const [promptDraft, setPromptDraft]       = useState('');
-  const [restPrefsDraft, setRestPrefsDraft] = useState('');
-  const [locationDraft, setLocationDraft]   = useState('');
+  const [promptDraft, setPromptDraft]               = useState('');
+  const [restPrefsDraft, setRestPrefsDraft]         = useState('');
+  const [storyInterestsDraft, setStoryInterestsDraft] = useState('');
+  const [locationDraft, setLocationDraft]           = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -623,16 +670,19 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       fetch('/api/settings').then(r => r.ok ? r.json() : Promise.reject(r.status)),
       fetch('/api/settings/auth-status').then(r => r.ok ? r.json() : Promise.reject(r.status)),
       fetch('/api/settings/rest-prefs').then(r => r.ok ? r.json() : Promise.reject(r.status)),
-    ]).then(([settingsRes, authRes, prefsRes]) => {
+      fetch('/api/settings/story-interests').then(r => r.ok ? r.json() : Promise.reject(r.status)),
+    ]).then(([settingsRes, authRes, prefsRes, storyRes]) => {
       const settings = settingsRes.status === 'fulfilled' ? settingsRes.value : {};
       const authStatus = authRes.status === 'fulfilled' ? authRes.value : {};
       const restPrefs = prefsRes.status === 'fulfilled' ? prefsRes.value : { content: '' };
+      const storyInterests = storyRes.status === 'fulfilled' ? storyRes.value : { content: '' };
       if (settingsRes.status === 'rejected') console.warn('[Settings] load failed:', settingsRes.reason);
       if (prefsRes.status === 'rejected') console.warn('[Settings] rest-prefs load failed — restart server?', prefsRes.reason);
       setS(settings);
       setAuth(authStatus);
       setPromptDraft(settings.prompt ?? '');
       setRestPrefsDraft(restPrefs.content ?? '');
+      setStoryInterestsDraft(storyInterests.content ?? '');
       setLocationDraft(settings.location ?? '');
     });
   }, [open]);
@@ -661,6 +711,10 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
 
   const saveRestPrefs = () => {
     fetch('/api/settings/rest-prefs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: restPrefsDraft }) });
+  };
+
+  const saveStoryInterests = () => {
+    fetch('/api/settings/story-interests', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: storyInterestsDraft }) });
   };
 
   const saveLocation = () => {
@@ -836,6 +890,16 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               onChange={e => setRestPrefsDraft(e.target.value)}
               onBlur={saveRestPrefs}/>
           </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
+            <div className="settings-row-label" style={{ marginBottom:6 }}>Story interests</div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Topics the DJ searches for when suggesting a Story break — AI builders, indie projects, tech discoveries</div>
+            <textarea className="settings-textarea" style={{ minHeight: 110 }}
+              placeholder="e.g. building with AI, Show HN, LLM experiments, creative coding, startup lessons…"
+              value={storyInterestsDraft}
+              onChange={e => setStoryInterestsDraft(e.target.value)}
+              onBlur={saveStoryInterests}/>
+          </div>
         </div>
 
         {/* Context — weather + calendars */}
@@ -978,13 +1042,35 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   );
 }
 
+// ── Notification sound — two-tone chime via Web Audio API ───────────────────
+function playNotificationSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const chime = (freq, start, dur, vol = 0.18) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(vol, start);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      osc.start(start);
+      osc.stop(start + dur);
+    };
+    const t = ctx.currentTime;
+    chime(1047, t,        0.18); // C6
+    chime(1319, t + 0.12, 0.22); // E6
+  } catch {}
+}
+
 // ── SeensWidget ──────────────────────────────────────────────────────────────
 function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, categoryFilter, setCategoryFilter }) {
   // ── state
   const [now, setNow]                   = useState(new Date());
   const [sessionSecs, setSessionSecs]   = useState(0);
   const [weather, setWeather]           = useState(null); // { icon, tempC }
-  const [sessionStart]                  = useState(Date.now());
+  const [sessionStart, setSessionStart] = useState(null);
   const [playing, setPlaying]           = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [upNextTrack, setUpNextTrack]   = useState(null);
@@ -1039,6 +1125,11 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const waitForInteractRef   = useRef(false);
   const wsRef                = useRef(null);
   const reconnectDelayRef    = useRef(1000);
+  const [notifications,    setNotifications]    = useState([]);
+  const [unreadCount,      setUnreadCount]      = useState(0);
+  const [showNotifications,setShowNotifications]= useState(false);
+  const [toast,            setToast]            = useState(null);
+  const toastTimerRef        = useRef(null);
 
   const categoryFilterRef = useRef(categoryFilter);
 
@@ -1690,6 +1781,14 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           else if (msg.action === 'resume') audioRef.current.play().catch(()=>{});
           else if (msg.action === 'next') skipNextRef.current();
         }
+        else if (msg.type === 'notification') {
+          setNotifications(prev => [msg, ...prev].slice(0, 50));
+          setUnreadCount(c => c + 1);
+          playNotificationSound();
+          clearTimeout(toastTimerRef.current);
+          setToast(msg);
+          toastTimerRef.current = setTimeout(() => setToast(null), 8000);
+        }
       };
       ws.onclose = () => {
         setConnected(false);
@@ -1705,6 +1804,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     setOverlayLabel('Tuning in…');
     startedRef.current = true;
     setStarted(true);
+    setSessionStart(Date.now());
     userChatPendingRef.current = true; // expect a user-chat dj-response; block scheduler
     waitForInteractRef.current = false;
 
@@ -1862,6 +1962,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     setResting(false);
     setRestPhase(null);
     setStarted(false);
+    setSessionStart(null);
     startedRef.current = false;
     setPlaying(false);
     setCurrentTrack(null);
@@ -1893,7 +1994,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const sessionProgress = Math.min(1, sessionSecs / target);
   const sessionRemaining = Math.max(0, target - sessionSecs);
   const hh = pad2(now.getHours()), mm = pad2(now.getMinutes()), ss = pad2(now.getSeconds());
-  const startHHMM = fmtClock(new Date(sessionStart));
+  const startHHMM = sessionStart ? fmtClock(new Date(sessionStart)) : null;
   const trackTitle  = currentTrack?.resolvedTitle  ?? currentTrack?.title  ?? 'Seens Radio';
   const trackArtist = currentTrack?.resolvedArtist ?? currentTrack?.artist ?? 'Your AI DJ';
 
@@ -1912,7 +2013,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     sendChat(t);
   };
 
-  const categories = ['All','Music','Painting','Photograph','Film','Poem','Place','Building','Sculpture'];
+  const categories = ['All','Music','Painting','Photograph','Film','Poem','Place','Building','Sculpture','Food','Story'];
 
   return (
     <div
@@ -1929,6 +2030,37 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           <div className="theme-pill">
             <button className={!dark?'active':''} onClick={() => setDark(false)}>L</button>
             <button className={dark?'active':''} onClick={() => setDark(true)}>D</button>
+          </div>
+          <div className="notif-wrap">
+            <button className="size-toggle" onClick={() => { setShowNotifications(v => !v); if (!showNotifications) setUnreadCount(0); }} aria-label="Notifications">
+              <Icon.Bell/>
+              {unreadCount > 0 && <span className="notif-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>}
+            </button>
+            {showNotifications && (
+              <div className="notif-panel">
+                <div className="notif-panel-hdr">
+                  <span className="notif-panel-title">Notifications</span>
+                  {notifications.length > 0 && (
+                    <button className="notif-clear" onClick={() => setNotifications([])}>Clear all</button>
+                  )}
+                </div>
+                <div className="notif-list">
+                  {notifications.length === 0
+                    ? <div className="notif-empty">No notifications yet</div>
+                    : notifications.map(n => (
+                      <div key={n.id} className="notif-item" onClick={() => n.link && window.open(n.link, '_blank')}>
+                        <div className={`notif-dot ${n.level ?? 'info'}`}/>
+                        <div className="notif-body">
+                          <div className="notif-item-title">{n.title}</div>
+                          <div className="notif-item-msg">{n.message}</div>
+                          <div className="notif-item-time">{fmtClock(new Date(n.ts))}</div>
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+            )}
           </div>
           <button className="size-toggle settings-open-btn" onClick={() => setShowSettings(true)} aria-label="Settings">
             <Icon.Settings/>
@@ -1973,8 +2105,8 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           <div className="session-progress"><i style={{ width:`${sessionProgress*100}%` }}/></div>
           <div className="session-meta">
             {size === 'mini'
-              ? <span style={{ margin:'0 auto' }}>STARTED {startHHMM}</span>
-              : <><span>STARTED {startHHMM}</span><span>REST IN {fmtDuration(sessionRemaining)}</span></>
+              ? <span style={{ margin:'0 auto' }}>{startHHMM ? `STARTED ${startHHMM}` : ''}</span>
+              : <>{startHHMM && <span>STARTED {startHHMM}</span>}<span>REST IN {fmtDuration(sessionRemaining)}</span></>
             }
           </div>
         </div>
@@ -2246,6 +2378,20 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         sysAudioDevice={sysAudioDevice}
         setSysAudioDevice={setSysAudioDevice}
       />
+
+      {/* Notification toast */}
+      {toast && (
+        <div className="notif-toast">
+          <div className={`notif-dot ${toast.level ?? 'info'}`} style={{ marginTop:4 }}/>
+          <div className="notif-toast-body">
+            <div className="notif-toast-title">{toast.title}</div>
+            <div className="notif-toast-msg">{toast.message}</div>
+          </div>
+          <button className="notif-toast-close" onClick={() => { clearTimeout(toastTimerRef.current); setToast(null); }}>
+            <Icon.Close/>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2270,6 +2416,18 @@ function App() {
   const [restIntervalMin, setRestIntervalMin] = useState(45);
   const [restDurationMin, setRestDurationMin] = useState(5);
   const [categoryFilter,  setCategoryFilter]  = useState('All');
+
+  // Restore persisted timer lengths on mount
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(s => {
+        if (!s) return;
+        if (s.workMin) setRestIntervalMin(parseInt(s.workMin) || 45);
+        if (s.restMin) setRestDurationMin(parseInt(s.restMin) || 5);
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <>

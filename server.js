@@ -58,6 +58,7 @@ const { default: restNarrateRoute }  = await import('./routes/rest-narrate.js');
 const { default: upnpRoute }         = await import('./routes/upnp.js');
 const { default: airplayRoute }      = await import('./routes/airplay.js');
 const { default: feedbackRoute }     = await import('./routes/feedback.js');
+const { default: notifyRoute }       = await import('./routes/notify.js');
 const streamHandler                  = (await import('./routes/stream.js')).default;
 
 app.use('/api/stream', streamAudioRoute);
@@ -74,6 +75,7 @@ app.use('/api/rest-narrate', restNarrateRoute);
 app.use('/api/upnp', upnpRoute);
 app.use('/api/airplay', airplayRoute);
 app.use('/api/feedback', feedbackRoute);
+app.use('/api/notify', notifyRoute);
 app.ws('/stream', streamHandler);
 
 // Apple Music user token endpoint (POSTed from MusicKit JS in the browser)

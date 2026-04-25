@@ -4,7 +4,8 @@ import { getPref, setPref, clearQueue } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgent } from '../src/ai/index.js';
 import { ensureUserDir, userPath } from '../src/paths.js';
 
-const REST_PREFS_PATH = userPath('rest-preferences.md');
+const REST_PREFS_PATH    = userPath('rest-preferences.md');
+const STORY_INTERESTS_PATH = userPath('story-interests.md');
 
 const router = express.Router();
 
@@ -75,6 +76,21 @@ router.post('/rest-prefs', (req, res) => {
   if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
   ensureUserDir();
   fs.writeFileSync(REST_PREFS_PATH, content, 'utf8');
+  res.json({ ok: true });
+});
+
+// GET /api/settings/story-interests — read story-interests.md
+router.get('/story-interests', (req, res) => {
+  try { res.json({ content: fs.readFileSync(STORY_INTERESTS_PATH, 'utf8') }); }
+  catch { res.json({ content: '' }); }
+});
+
+// POST /api/settings/story-interests — write story-interests.md
+router.post('/story-interests', (req, res) => {
+  const { content } = req.body;
+  if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
+  ensureUserDir();
+  fs.writeFileSync(STORY_INTERESTS_PATH, content, 'utf8');
   res.json({ ok: true });
 });
 
