@@ -324,6 +324,7 @@ body {
 .settings-row-sub { font-size:10.5px; color:var(--ink-3); margin-top:1px; }
 .settings-input { appearance:none; border:0.5px solid var(--line); background:var(--surface-2); border-radius:8px; padding:6px 10px; font-family:var(--font-sans); font-size:12px; color:var(--ink); outline:none; width:70px; text-align:center; }
 .settings-input:focus { border-color:var(--ink-3); background:var(--surface); }
+.settings-input.full { width:100%; text-align:left; box-sizing:border-box; }
 .settings-select { appearance:none; border:0.5px solid var(--line); background:var(--surface-2); border-radius:8px; padding:6px 28px 6px 10px; font-family:var(--font-sans); font-size:12px; color:var(--ink); outline:none; cursor:pointer; background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 9px center; }
 .settings-select:focus { border-color:var(--ink-3); }
 .settings-pill { display:flex; background:var(--surface-2); border-radius:999px; padding:2px; border:0.5px solid var(--line); flex-shrink:0; }
@@ -648,7 +649,7 @@ function ArtReveal({ piece, loading, onDismiss, onReturn, onNext }) {
 }
 
 // ── SettingsPanel ────────────────────────────────────────────────────────────
-function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, sysAudioDevice, setSysAudioDevice }) {
+function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, sysAudioDevice, setSysAudioDevice, pluginsVersion }) {
   const [s, setS]           = useState(null);   // server settings
   const [auth, setAuth]     = useState({});
   const [sysDevices, setSysDevices]     = useState(null);  // macOS audio output list
@@ -663,6 +664,17 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [restPrefsDraft, setRestPrefsDraft]         = useState('');
   const [storyInterestsDraft, setStoryInterestsDraft] = useState('');
   const [locationDraft, setLocationDraft]           = useState('');
+  const [plugins, setPlugins]                       = useState([]);
+  const [addingPlugin, setAddingPlugin]             = useState(false);
+  const [newPlugin, setNewPlugin]                   = useState({ name:'', description:'', baseUrl:'' });
+  const [installUrl, setInstallUrl]                 = useState('');
+  const [installState, setInstallState]             = useState('idle'); // idle|loading|error
+  const [editingRaw, setEditingRaw]                 = useState(false);
+  const [rawDraft, setRawDraft]                     = useState('');
+  const [rawError, setRawError]                     = useState('');
+  const [rawSaving, setRawSaving]                   = useState(false);
+  const [musicConnectors, setMusicConnectors]       = useState([]);
+  const [connectorKeyDrafts, setConnectorKeyDrafts] = useState({});
 
   useEffect(() => {
     if (!open) return;
@@ -671,7 +683,9 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       fetch('/api/settings/auth-status').then(r => r.ok ? r.json() : Promise.reject(r.status)),
       fetch('/api/settings/rest-prefs').then(r => r.ok ? r.json() : Promise.reject(r.status)),
       fetch('/api/settings/story-interests').then(r => r.ok ? r.json() : Promise.reject(r.status)),
-    ]).then(([settingsRes, authRes, prefsRes, storyRes]) => {
+      fetch('/api/plugins').then(r => r.ok ? r.json() : []),
+      fetch('/api/music-connectors').then(r => r.ok ? r.json() : []),
+    ]).then(([settingsRes, authRes, prefsRes, storyRes, pluginsRes, connectorsRes]) => {
       const settings = settingsRes.status === 'fulfilled' ? settingsRes.value : {};
       const authStatus = authRes.status === 'fulfilled' ? authRes.value : {};
       const restPrefs = prefsRes.status === 'fulfilled' ? prefsRes.value : { content: '' };
@@ -684,8 +698,17 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       setRestPrefsDraft(restPrefs.content ?? '');
       setStoryInterestsDraft(storyInterests.content ?? '');
       setLocationDraft(settings.location ?? '');
+      setPlugins(pluginsRes.status === 'fulfilled' ? pluginsRes.value : []);
+      setMusicConnectors(connectorsRes.status === 'fulfilled' ? connectorsRes.value : []);
     });
   }, [open]);
+
+  // Hot-reload: re-fetch plugins and connectors whenever plugins.json changes
+  useEffect(() => {
+    if (!open || pluginsVersion === 0) return;
+    fetch('/api/plugins').then(r => r.ok ? r.json() : []).then(setPlugins).catch(() => {});
+    fetch('/api/music-connectors').then(r => r.ok ? r.json() : []).then(setMusicConnectors).catch(() => {});
+  }, [pluginsVersion]);
 
   const save = (patch) => {
     // Normalise dotted API keys → the flat field names the UI reads from `s`
@@ -738,6 +761,45 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
     }, 2000);
   };
 
+  const connectConnector = async (connector) => {
+    if (connector.authType !== 'oauth2') return;
+    let authUrl;
+    try {
+      const r = await fetch(`/api/music-connectors/${encodeURIComponent(connector.name)}/auth-init`, { method: 'POST' });
+      const d = await r.json();
+      authUrl = d.authUrl;
+    } catch { return; }
+    if (!authUrl) return;
+    const w = window.open(authUrl, `${connector.name}-auth`, 'width=600,height=700,left=200,top=100');
+    let polls = 0;
+    const poll = setInterval(async () => {
+      polls++;
+      if (polls > 30) { clearInterval(poll); return; }
+      try {
+        const status = await fetch(`/api/music-connectors/${encodeURIComponent(connector.name)}/auth-status`).then(r => r.json());
+        if (status.connected) {
+          setMusicConnectors(prev => prev.map(c => c.name === connector.name ? { ...c, connected: true, user: status.user ?? null } : c));
+          clearInterval(poll);
+        }
+      } catch {}
+      if (w && w.closed) clearInterval(poll);
+    }, 2000);
+  };
+
+  const saveConnectorKey = async (name, key) => {
+    if (!key.trim()) return;
+    await fetch(`/api/music-connectors/${encodeURIComponent(name)}/api-key`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+    });
+    setMusicConnectors(prev => prev.map(c => c.name === name ? { ...c, connected: true } : c));
+    setConnectorKeyDrafts(prev => ({ ...prev, [name]: '' }));
+  };
+
+  const disconnectConnector = async (name) => {
+    await fetch(`/api/music-connectors/${encodeURIComponent(name)}/revoke`, { method: 'POST' });
+    setMusicConnectors(prev => prev.map(c => c.name === name ? { ...c, connected: false, user: null } : c));
+  };
+
   const sync = async () => {
     setSyncing(true); setSyncMsg('');
     try {
@@ -752,6 +814,68 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
     setClearing(true);
     await fetch('/api/settings/queue/clear', { method:'POST' }).catch(() => {});
     setClearing(false);
+  };
+
+  const togglePlugin = async (name) => {
+    await fetch(`/api/plugins/${encodeURIComponent(name)}/toggle`, { method:'POST' });
+    setPlugins(prev => prev.map(p => p.name === name ? { ...p, enabled: !p.enabled } : p));
+  };
+
+  const deletePlugin = async (name) => {
+    await fetch(`/api/plugins/${encodeURIComponent(name)}`, { method:'DELETE' });
+    setPlugins(prev => prev.filter(p => p.name !== name));
+  };
+
+  const addPlugin = async () => {
+    if (!newPlugin.name.trim() || !newPlugin.baseUrl.trim()) return;
+    const plugin = { ...newPlugin, enabled: true, endpoints: {} };
+    await fetch('/api/plugins', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(plugin) });
+    setPlugins(prev => { const idx = prev.findIndex(p => p.name === plugin.name); return idx >= 0 ? prev.map((p,i) => i===idx ? plugin : p) : [...prev, plugin]; });
+    setNewPlugin({ name:'', description:'', baseUrl:'' });
+    setAddingPlugin(false);
+  };
+
+  const openRawEditor = () => {
+    setRawDraft(JSON.stringify(plugins, null, 2));
+    setRawError('');
+    setEditingRaw(true);
+  };
+
+  const saveRaw = async () => {
+    setRawError('');
+    let parsed;
+    try {
+      parsed = JSON.parse(rawDraft);
+      if (!Array.isArray(parsed)) throw new Error('Must be a JSON array [ … ]');
+    } catch (e) {
+      setRawError(e.message);
+      return;
+    }
+    setRawSaving(true);
+    try {
+      const r = await fetch('/api/plugins/raw', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: rawDraft }) });
+      const d = await r.json();
+      if (!r.ok) { setRawError(d.error ?? 'Save failed'); return; }
+      setPlugins(parsed);
+      setEditingRaw(false);
+    } catch (e) {
+      setRawError(e.message);
+    } finally {
+      setRawSaving(false);
+    }
+  };
+
+  const installFromUrl = async () => {
+    if (!installUrl.trim()) return;
+    setInstallState('loading');
+    try {
+      const r = await fetch('/api/plugins/install-from-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ url: installUrl.trim() }) });
+      const d = await r.json();
+      if (!r.ok) { setInstallState('error'); return; }
+      setPlugins(prev => { const idx = prev.findIndex(p => p.name === d.plugin.name); return idx >= 0 ? prev.map((p,i) => i===idx ? d.plugin : p) : [...prev, d.plugin]; });
+      setInstallUrl('');
+      setInstallState('idle');
+    } catch { setInstallState('error'); }
   };
 
   const VOICES = {
@@ -842,6 +966,68 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               )}
             </div>
           ))}
+          {musicConnectors.length > 0 && (
+            <>
+              <div style={{ fontFamily:'var(--font-mono)', fontSize:'9px', letterSpacing:'0.08em', textTransform:'uppercase', color:'var(--ink-3)', marginTop:10, marginBottom:6 }}>Custom Connectors</div>
+              {musicConnectors.map(connector => {
+                const keyDraft = connectorKeyDrafts[connector.name] ?? '';
+                const needsKey = connector.authType === 'apikey' || connector.authType === 'token';
+                const iconStyle = connector.color
+                  ? { background: connector.color + '22', borderColor: connector.color + '44' }
+                  : {};
+                return (
+                  <div key={connector.name} className="auth-row">
+                    <div className="auth-icon" style={iconStyle}>
+                      {connector.icon
+                        ? <span style={{ fontSize:14 }}>{connector.icon}</span>
+                        : <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{ opacity:0.5 }}><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+                      }
+                    </div>
+                    <div className="auth-info">
+                      <div className="auth-name">{connector.displayName}</div>
+                      <div className={`auth-status-text ${connector.connected ? 'connected' : 'disconnected'}`}>
+                        {connector.connected
+                          ? `● Connected${connector.user ? ' · ' + connector.user : ''}`
+                          : '○ Not connected'
+                        }
+                      </div>
+                    </div>
+                    {connector.authType === 'none' && (
+                      <span style={{ fontFamily:'var(--font-mono)', fontSize:'9.5px', color:'var(--accent)' }}>Active</span>
+                    )}
+                    {connector.authType === 'oauth2' && !connector.connected && (
+                      <button className="settings-btn" onClick={() => connectConnector(connector)}>Connect →</button>
+                    )}
+                    {connector.authType === 'oauth2' && connector.connected && (
+                      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                        <span style={{ fontFamily:'var(--font-mono)', fontSize:'9.5px', color:'var(--accent)' }}>✓</span>
+                        <button className="settings-btn" style={{ fontSize:'9px', padding:'3px 8px' }}
+                          onClick={() => disconnectConnector(connector.name)}>Disconnect</button>
+                      </div>
+                    )}
+                    {needsKey && !connector.connected && (
+                      <div style={{ display:'flex', gap:4 }}>
+                        <input className="settings-input" type="password"
+                          style={{ width:110, fontSize:10, padding:'3px 6px' }}
+                          placeholder="Enter key…"
+                          value={keyDraft}
+                          onChange={e => setConnectorKeyDrafts(prev => ({ ...prev, [connector.name]: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && saveConnectorKey(connector.name, keyDraft)}/>
+                        <button className="settings-btn" onClick={() => saveConnectorKey(connector.name, keyDraft)}>Save</button>
+                      </div>
+                    )}
+                    {needsKey && connector.connected && (
+                      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                        <span style={{ fontFamily:'var(--font-mono)', fontSize:'9.5px', color:'var(--accent)' }}>✓</span>
+                        <button className="settings-btn" style={{ fontSize:'9px', padding:'3px 8px' }}
+                          onClick={() => disconnectConnector(connector.name)}>Disconnect</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>
 
         {/* AI */}
@@ -1026,6 +1212,72 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
         </div>
         
         <div className="settings-section">
+          <div className="settings-section-label">Plugins</div>
+          {plugins.length === 0 && !addingPlugin && (
+            <p style={{ fontSize:11, color:'var(--ink-3)', margin:'0 0 10px' }}>No plugins installed. Add one to let the DJ fetch external content like podcasts.</p>
+          )}
+          {plugins.map(p => (
+            <div key={p.name} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:12, fontWeight:600, color:'var(--ink-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
+                {p.baseUrl && <div style={{ fontSize:10, color:'var(--ink-3)', fontFamily:'var(--font-mono)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.baseUrl}</div>}
+              </div>
+              <label style={{ display:'flex', alignItems:'center', gap:4, cursor:'pointer', flexShrink:0 }}>
+                <input type="checkbox" checked={!!p.enabled} onChange={() => togglePlugin(p.name)} style={{ accentColor:'var(--accent)', width:14, height:14 }}/>
+                <span style={{ fontSize:10, color:'var(--ink-2)' }}>{p.enabled ? 'ON' : 'OFF'}</span>
+              </label>
+              <button className="settings-btn" style={{ padding:'2px 8px', fontSize:10 }} onClick={() => deletePlugin(p.name)}>Remove</button>
+            </div>
+          ))}
+          <div style={{ display:'flex', gap:6, marginTop:4, alignItems:'center' }}>
+            <input className="settings-input full" style={{ flex:1 }} placeholder="http://…  unix:///path/to.sock  stdio://node /path/to/plugin.js" value={installUrl} onChange={e => { setInstallUrl(e.target.value); setInstallState('idle'); }} onKeyDown={e => e.key === 'Enter' && installFromUrl()}/>
+            <button className="settings-btn primary" style={{ flexShrink:0 }} onClick={installFromUrl} disabled={installState === 'loading'}>
+              {installState === 'loading' ? '…' : installState === 'error' ? 'Failed' : 'Install'}
+            </button>
+          </div>
+          <p style={{ fontSize:10, color:'var(--ink-3)', margin:'4px 0 8px' }}>HTTP, Unix socket (unix://), or subprocess (stdio://) — the app fetches the manifest and registers it automatically.</p>
+          {addingPlugin ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:4 }}>
+              <input className="settings-input full" placeholder="Plugin name (e.g. briefcast)" value={newPlugin.name} onChange={e => setNewPlugin(p=>({...p,name:e.target.value}))}/>
+              <input className="settings-input full" placeholder="Base URL (e.g. http://localhost:3001)" value={newPlugin.baseUrl} onChange={e => setNewPlugin(p=>({...p,baseUrl:e.target.value}))}/>
+              <input className="settings-input full" placeholder="Description (optional)" value={newPlugin.description} onChange={e => setNewPlugin(p=>({...p,description:e.target.value}))}/>
+              <div style={{ display:'flex', gap:8 }}>
+                <button className="settings-btn primary" onClick={addPlugin}>Add</button>
+                <button className="settings-btn" onClick={() => { setAddingPlugin(false); setNewPlugin({name:'',description:'',baseUrl:''}); }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button className="settings-btn" onClick={() => setAddingPlugin(true)}>+ Add manually</button>
+          )}
+
+          {editingRaw ? (
+            <div style={{ marginTop:12 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style={{ flexShrink:0 }}>
+                  <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 3.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4.5zm0 7a.875.875 0 1 1 0-1.75.875.875 0 0 1 0 1.75z" fill="oklch(0.7 0.18 60)"/>
+                </svg>
+                <span style={{ fontSize:10, color:'oklch(0.7 0.18 60)', lineHeight:1.4 }}>
+                  Editing raw JSON. Invalid JSON will not be saved. Changes are hot-reloaded — no restart needed.
+                </span>
+              </div>
+              <textarea
+                value={rawDraft}
+                onChange={e => { setRawDraft(e.target.value); setRawError(''); }}
+                spellCheck={false}
+                style={{ width:'100%', boxSizing:'border-box', minHeight:220, fontFamily:'var(--font-mono)', fontSize:10.5, lineHeight:1.55, background:'var(--surface-2)', border:`0.5px solid ${rawError ? 'oklch(0.65 0.18 25)' : 'var(--line)'}`, borderRadius:8, color:'var(--ink)', padding:'8px 10px', resize:'vertical', outline:'none' }}
+              />
+              {rawError && <div style={{ fontSize:10, color:'oklch(0.65 0.18 25)', marginTop:4, fontFamily:'var(--font-mono)' }}>{rawError}</div>}
+              <div style={{ display:'flex', gap:8, marginTop:8 }}>
+                <button className="settings-btn primary" onClick={saveRaw} disabled={rawSaving}>{rawSaving ? 'Saving…' : 'Save'}</button>
+                <button className="settings-btn" onClick={() => { setEditingRaw(false); setRawError(''); }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button className="settings-btn" style={{ marginTop:10 }} onClick={openRawEditor}>Edit plugins.json</button>
+          )}
+        </div>
+
+        <div className="settings-section">
           <div className="settings-section-label">Library</div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
             <button className="settings-btn primary" onClick={sync} disabled={syncing}>
@@ -1130,6 +1382,8 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const [showNotifications,setShowNotifications]= useState(false);
   const [toast,            setToast]            = useState(null);
   const toastTimerRef        = useRef(null);
+  const [pluginPiece,      setPluginPiece]      = useState(null); // rest-piece sourced from a plugin
+  const [pluginsVersion,   setPluginsVersion]   = useState(0);   // bumped when plugins.json changes on disk
 
   const categoryFilterRef = useRef(categoryFilter);
 
@@ -1400,12 +1654,17 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     if (resting) {
       preRestSizeRef.current = size;
       if (size === 'mini') setSize('expanded');
-      // Use prefetched piece if already ready, else fetch now
+      // Use prefetched piece, or a plugin-sourced piece, or fetch from API
       const cached = prefetchedRestRef.current;
       if (cached && cached !== 'loading' && cached.piece) {
         console.log('[Rest] using prefetched piece:', cached.piece.title);
         setRestPiece(cached.piece);
         setRestPieceLoading(false);
+      } else if (pluginPiece) {
+        console.log('[Rest] using plugin piece:', pluginPiece.title);
+        setRestPiece({ title: pluginPiece.title, body: pluginPiece.text, imageUrl: pluginPiece.imageUrl, url: pluginPiece.sourceUrl, source: pluginPiece.source, cat: 'Plugin' });
+        setRestPieceLoading(false);
+        setPluginPiece(null);
       } else {
         setRestPieceLoading(true);
         setRestPiece(null);
@@ -1788,6 +2047,12 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           clearTimeout(toastTimerRef.current);
           setToast(msg);
           toastTimerRef.current = setTimeout(() => setToast(null), 8000);
+        }
+        else if (msg.type === 'plugin-rest-piece') {
+          setPluginPiece({ title: msg.title, imageUrl: msg.imageUrl, text: msg.text, sourceUrl: msg.sourceUrl, source: msg.source });
+        }
+        else if (msg.type === 'plugins-changed') {
+          setPluginsVersion(v => v + 1);
         }
       };
       ws.onclose = () => {
@@ -2377,6 +2642,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         setRestDurationMin={setRestDurationMin}
         sysAudioDevice={sysAudioDevice}
         setSysAudioDevice={setSysAudioDevice}
+        pluginsVersion={pluginsVersion}
       />
 
       {/* Notification toast */}

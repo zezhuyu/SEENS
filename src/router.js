@@ -5,6 +5,7 @@ import { addMessage, enqueue, enqueueNext, recordSuggestions } from './state.js'
 import { broadcast } from './ws-broadcast.js';
 import { resolveTracksOrdered } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
+import { callPlugin } from './plugin-runner.js';
 
 // Simple command patterns that don't need AI
 const DIRECT_COMMANDS = [
@@ -40,6 +41,58 @@ export async function handleInput(input, triggerType = 'user-chat') {
   } catch (err) {
     console.error(`[Router:${triggerType}] ${ts()} AI error:`, err.message);
     return { error: err.message };
+  }
+
+  // ── Plugin two-pass ─────────────────────────────────────────────────────────
+  // Pass 1 may return pluginCall — execute it, then re-run AI with the result.
+  let activePluginName = null;
+  if (djResponse.pluginCall?.plugin && djResponse.pluginCall?.endpoint) {
+    const { plugin: pluginName, endpoint, params = {} } = djResponse.pluginCall;
+    activePluginName = pluginName;
+    try {
+      console.log(`[Router:${triggerType}] ${ts()} plugin call → ${pluginName}/${endpoint}`);
+      const pluginData = await callPlugin(pluginName, endpoint, params);
+      console.log(`[Router:${triggerType}] ${ts()} plugin result received — re-running AI`);
+      const pluginContext =
+        `[Plugin result from ${pluginName}/${endpoint}]:\n${JSON.stringify(pluginData, null, 2)}\n\n` +
+        `Based on this data, set "pluginAction" to decide what to do: ` +
+        `use "play" to stream the audioUrl, "rest-piece" to save imageUrl as art recommendation, or "info" to include in your say.`;
+      djResponse = await generate(systemPrompt, `${trimmed}\n\n${pluginContext}`);
+      console.log(`[Router:${triggerType}] ${ts()} AI pass-2 done — pluginAction=${djResponse.pluginAction?.type ?? 'none'}`);
+    } catch (err) {
+      console.warn(`[Router:${triggerType}] plugin call failed: ${err.message}`);
+      // Fall through with original response
+    }
+  }
+
+  // ── Dispatch pluginAction ───────────────────────────────────────────────────
+  if (djResponse.pluginAction) {
+    const { type, audioUrl, title, imageUrl, text, sourceUrl } = djResponse.pluginAction;
+    const pluginLabel = activePluginName ?? 'plugin';
+
+    if (type === 'play' && audioUrl) {
+      const pluginTrack = {
+        title:          title || 'Podcast Episode',
+        artist:         pluginLabel,
+        source:         'plugin',
+        videoId:        null,
+        streamUrl:      `/api/stream/proxy?url=${encodeURIComponent(audioUrl)}`,
+        resolvedTitle:  title || 'Podcast Episode',
+        resolvedArtist: pluginLabel,
+      };
+      djResponse = { ...djResponse, play: [pluginTrack, ...(djResponse.play ?? [])] };
+      console.log(`[Router:${triggerType}] ${ts()} plugin track queued: "${pluginTrack.title}"`);
+    } else if (type === 'rest-piece') {
+      broadcast('plugin-rest-piece', {
+        title:     title ?? '',
+        imageUrl:  imageUrl ?? null,
+        text:      text ?? djResponse.say,
+        sourceUrl: sourceUrl ?? null,
+        source:    pluginLabel,
+      });
+      console.log(`[Router:${triggerType}] ${ts()} plugin rest-piece broadcast: "${title}"`);
+    }
+    // 'info' — data is reflected in djResponse.say, no extra action needed
   }
 
   // Note: finalSay may be corrected after resolve — message stored after resolve step

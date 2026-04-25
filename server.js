@@ -59,6 +59,8 @@ const { default: upnpRoute }         = await import('./routes/upnp.js');
 const { default: airplayRoute }      = await import('./routes/airplay.js');
 const { default: feedbackRoute }     = await import('./routes/feedback.js');
 const { default: notifyRoute }       = await import('./routes/notify.js');
+const { default: pluginsRoute }          = await import('./routes/plugins.js');
+const { default: musicConnectorsRoute }  = await import('./routes/music-connectors.js');
 const streamHandler                  = (await import('./routes/stream.js')).default;
 
 app.use('/api/stream', streamAudioRoute);
@@ -76,6 +78,8 @@ app.use('/api/upnp', upnpRoute);
 app.use('/api/airplay', airplayRoute);
 app.use('/api/feedback', feedbackRoute);
 app.use('/api/notify', notifyRoute);
+app.use('/api/plugins', pluginsRoute);
+app.use('/api/music-connectors', musicConnectorsRoute);
 app.ws('/stream', streamHandler);
 
 // Apple Music user token endpoint (POSTed from MusicKit JS in the browser)
@@ -204,10 +208,33 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
     // Start scheduler after server is up
     import('./src/scheduler.js').then(({ startScheduler }) => startScheduler());
 
+    // Background location auto-refresh (runs immediately, then every hour)
+    import('./src/location.js').then(({ startLocationRefresh }) => startLocationRefresh());
+
     // TTS cache pruning once a day
     import('./src/tts.js').then(({ pruneCache }) => {
       pruneCache();
       setInterval(pruneCache, 24 * 60 * 60 * 1000);
+    });
+
+    // Hot-reload plugins.json — broadcast to all connected clients when the file
+    // changes so the Settings panel refreshes without a restart or manual reload.
+    import('./src/paths.js').then(({ userPath }) => {
+      import('./src/ws-broadcast.js').then(({ broadcast }) => {
+        const pluginsFile = userPath('plugins.json');
+        let debounce = null;
+        try {
+          fs.watch(pluginsFile, () => {
+            clearTimeout(debounce);
+            debounce = setTimeout(() => {
+              console.log('[Server] plugins.json changed — notifying clients');
+              broadcast('plugins-changed', {});
+            }, 200);
+          });
+        } catch {
+          // File may not exist yet; watcher will be set up when first plugin is saved
+        }
+      });
     });
 
     resolve(actualPort);

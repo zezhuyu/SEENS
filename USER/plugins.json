@@ -1,0 +1,24 @@
+[
+  {
+    "name": "briefcast",
+    "description": "Personal podcast app. Fetches your daily briefing episodes. Each episode has audio, cover art, title, and a summary. Use when the user asks to play a podcast, briefing, or news episode.",
+    "enabled": false,
+    "baseUrl": "http://localhost:3001",
+    "endpoints": {
+      "latest": {
+        "path": "/api/episodes/latest",
+        "method": "GET",
+        "description": "Returns the most recent episode. Response shape: { title, audioUrl, imageUrl, description, duration, pubDate }",
+        "params": []
+      },
+      "search": {
+        "path": "/api/episodes/search",
+        "method": "GET",
+        "description": "Search episodes by topic or keyword. Response shape: [{ title, audioUrl, imageUrl, description, duration }]",
+        "params": [
+          { "name": "q", "in": "query", "description": "search query or topic" }
+        ]
+      }
+    }
+  }
+]

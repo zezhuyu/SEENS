@@ -3,7 +3,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getRecentMessages, getRecentPlays, getPref, getRecentSuggestions, getRecentFeedback } from './state.js';
 import { getWeatherContext } from './weather.js';
+import { getLocation } from './location.js';
 import { readUserFile } from './paths.js';
+import { pluginSystemContext } from './plugin-runner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -56,11 +58,13 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
   const LENSES = ['deep cut','B-side','underrated gem','recent release','live version era','debut album feel'];
   const seed   = MOODS[now.getMinutes() % MOODS.length];
   const lens   = LENSES[Math.floor(now.getSeconds() / 10) % LENSES.length];
+  const userLocation = getLocation();
   const envParts = [
     `Current time: ${now.toLocaleString('en-US', { weekday: 'long', hour: '2-digit', minute: '2-digit' })}`,
     `Season: ${getSeason(now)}`,
     `Trigger: ${triggerType}`,
     `Session mood seed: ${seed} — lean toward ${lens} picks this session`,
+    ...(userLocation ? [`User location: ${userLocation}`] : []),
   ];
 
   // Weather (async, non-blocking — falls back gracefully)
@@ -108,6 +112,8 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
   // Fragment 7 — Custom user instructions
   const customPrompt = getPref('user.prompt', '').trim();
 
+  const pluginCtx = pluginSystemContext();
+
   return [
     persona,
     '---\n## User Taste Profile\n' + taste,
@@ -121,6 +127,7 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     '## Agent Info\n' + agentInfo,
     '## Mood State\n' + moodState,
     customPrompt ? '## Custom Instructions from User\n' + customPrompt : '',
+    pluginCtx    ? '## Plugins\n' + pluginCtx : '',
   ].filter(Boolean).join('\n\n---\n\n');
 }
 

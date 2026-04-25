@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getPref } from '../src/state.js';
 import { ensureUserDir, userPath } from '../src/paths.js';
+import { getMusicConnectors, syncConnectorTracks } from '../src/music-connector.js';
 
 const MIN_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
@@ -14,14 +15,32 @@ export async function syncAll({ force = false } = {}) {
 
   const results = { spotify: [], youtube: [], apple: [], errors: [] };
 
-  // Run all three in parallel, gracefully handle auth failures
+  // Run all three built-in services in parallel, gracefully handle auth failures
   await Promise.all([
     syncService('spotify', results),
     syncService('youtube', results),
     syncService('apple', results),
   ]);
 
-  const allTracks = [...results.spotify, ...results.youtube, ...results.apple];
+  // Sync any enabled custom music connectors
+  const connectors = getMusicConnectors();
+  const connectorResults = await Promise.all(
+    connectors.map(async (p) => {
+      try {
+        const tracks = await syncConnectorTracks(p);
+        console.log(`[Sync:${p.name}] ${tracks.length} tracks`);
+        return { name: p.name, tracks };
+      } catch (err) {
+        console.warn(`[Sync:${p.name}] Skipped: ${err.message}`);
+        results.errors.push({ service: p.name, error: err.message });
+        return { name: p.name, tracks: [] };
+      }
+    })
+  );
+  results.connectors = connectorResults;
+  const connectorTracks = connectorResults.flatMap(r => r.tracks);
+
+  const allTracks = [...results.spotify, ...results.youtube, ...results.apple, ...connectorTracks];
   const deduped = deduplicateTracks(allTracks);
 
   ensureUserDir();
@@ -73,7 +92,8 @@ function deduplicateTracks(tracks) {
 
 function generateTasteProfile(results) {
   const artistCounts = new Map();
-  const allTracks = [...results.spotify, ...results.youtube, ...results.apple].filter(Boolean);
+  const connectorTracks = (results.connectors ?? []).flatMap(r => r.tracks);
+  const allTracks = [...results.spotify, ...results.youtube, ...results.apple, ...connectorTracks].filter(Boolean);
 
   for (const t of allTracks) {
     if (!t.artist) continue;
@@ -107,7 +127,8 @@ ${topGenres.join('\n') || '- (not yet synced)'}
 - Spotify tracks: ${results.spotify.length}
 - Apple Music tracks: ${results.apple.length}
 - YouTube tracks: ${results.youtube.length}
-- Total unique: ${[...results.spotify, ...results.apple, ...results.youtube].filter(Boolean).length}
+${(results.connectors ?? []).filter(r => r.tracks.length > 0).map(r => `- ${r.name} tracks: ${r.tracks.length}`).join('\n')}
+- Total unique: ${[...results.spotify, ...results.apple, ...results.youtube, ...connectorTracks].filter(Boolean).length}
 
 ## Notes
 *(Edit this file to add personal notes about your taste — the AI DJ will read them)*

@@ -4,6 +4,7 @@
  */
 
 import { getPref } from './state.js';
+import { getLocation } from './location.js';
 
 let cache = null;
 let cacheExpiry = 0;
@@ -12,7 +13,7 @@ const TTL = 30 * 60 * 1000;
 export async function getWeatherContext() {
   if (cache && Date.now() < cacheExpiry) return cache;
 
-  const location = getPref('user.location', '').trim();
+  const location = getLocation();
   if (!location) return null;
 
   try {

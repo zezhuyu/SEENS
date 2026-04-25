@@ -27,6 +27,9 @@ export async function resolveTracksOrdered(tracks) {
 }
 
 async function resolveOne(track) {
+  // Plugin and connector tracks with a direct streamUrl — skip all lookups
+  if ((track.source === 'plugin' || track.source?.startsWith('connector:')) && track.streamUrl) return track;
+
   let meta = { ...track };
 
   // Step 1: Spotify metadata (artwork, canonical names, URI)

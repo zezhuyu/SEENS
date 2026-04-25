@@ -19,6 +19,29 @@ const DJ_SCHEMA = JSON.stringify({
     play:   { type: 'array', items: { type: 'object' } },
     reason: { type: 'string' },
     segue:  { type: 'string' },
+    pluginCall: {
+      type: 'object',
+      description: 'Optional. Request data from a plugin. Set only if you need external data to answer. Leave "play" empty when using this.',
+      properties: {
+        plugin:   { type: 'string', description: 'Plugin name exactly as listed' },
+        endpoint: { type: 'string', description: 'Endpoint name to call' },
+        params:   { type: 'object', description: 'Query or body parameters for the endpoint' },
+      },
+      required: ['plugin', 'endpoint'],
+    },
+    pluginAction: {
+      type: 'object',
+      description: 'Optional. What to do with plugin result data (only set after receiving plugin result).',
+      properties: {
+        type:      { type: 'string', enum: ['play', 'rest-piece', 'info'], description: '"play" to stream audioUrl, "rest-piece" to save imageUrl as art recommendation, "info" to include in say only' },
+        title:     { type: 'string' },
+        audioUrl:  { type: 'string', description: 'Direct audio URL — required for type=play' },
+        imageUrl:  { type: 'string', description: 'Image URL — for type=rest-piece' },
+        text:      { type: 'string', description: 'Description text — for type=rest-piece' },
+        sourceUrl: { type: 'string', description: 'Link to original source' },
+      },
+      required: ['type', 'title'],
+    },
   },
   required: ['say', 'play', 'reason', 'segue'],
 });
@@ -60,10 +83,12 @@ function parseClaudeOutput(raw) {
 
 function normalize(obj) {
   return {
-    say:    String(obj.say ?? ''),
-    play:   Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
-    reason: String(obj.reason ?? ''),
-    segue:  String(obj.segue ?? ''),
+    say:          String(obj.say ?? ''),
+    play:         Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
+    reason:       String(obj.reason ?? ''),
+    segue:        String(obj.segue ?? ''),
+    pluginCall:   obj.pluginCall?.plugin ? obj.pluginCall   : null,
+    pluginAction: obj.pluginAction?.type ? obj.pluginAction : null,
   };
 }
 

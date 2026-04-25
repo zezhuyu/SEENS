@@ -56,10 +56,12 @@ function parseOutput(text) {
 
 function normalize(obj) {
   return {
-    say:    String(obj.say ?? ''),
-    play:   Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
-    reason: String(obj.reason ?? ''),
-    segue:  String(obj.segue ?? ''),
+    say:          String(obj.say ?? ''),
+    play:         Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
+    reason:       String(obj.reason ?? ''),
+    segue:        String(obj.segue ?? ''),
+    pluginCall:   obj.pluginCall?.plugin ? obj.pluginCall   : null,
+    pluginAction: obj.pluginAction?.type ? obj.pluginAction : null,
   };
 }
 

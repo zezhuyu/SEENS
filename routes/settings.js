@@ -31,7 +31,11 @@ router.post('/', (req, res) => {
   if (voice    !== undefined) setPref('tts.voice',       voice);
   if (energy   !== undefined) setPref('mood.energy',     energy);
   if (prompt   !== undefined) setPref('user.prompt',     prompt);
-  if (location !== undefined) setPref('user.location',   location.trim());
+  if (location !== undefined) {
+    const loc = location.trim();
+    setPref('user.location', loc);
+    setPref('user.location.pinned', loc ? '1' : '');
+  }
   if (workMin  !== undefined) setPref('session.workMin', String(parseInt(workMin) || 45));
   if (restMin  !== undefined) setPref('session.restMin', String(parseInt(restMin) || 5));
   res.json({ ok: true });
