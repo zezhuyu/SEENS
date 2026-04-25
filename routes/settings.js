@@ -2,10 +2,13 @@ import express from 'express';
 import fs from 'fs';
 import { getPref, setPref, clearQueue } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgent } from '../src/ai/index.js';
-import { ensureUserDir, userPath } from '../src/paths.js';
+import { ensureUserDir, userPath, readUserFile } from '../src/paths.js';
 
-const REST_PREFS_PATH    = userPath('rest-preferences.md');
+const REST_PREFS_PATH      = userPath('rest-preferences.md');
 const STORY_INTERESTS_PATH = userPath('story-interests.md');
+const ROUTINES_PATH        = userPath('routines.md');
+const MOOD_RULES_PATH      = userPath('mood-rules.md');
+const TASTE_PATH           = userPath('taste.md');
 
 const router = express.Router();
 
@@ -68,35 +71,34 @@ router.get('/auth-status', (req, res) => {
   });
 });
 
-// GET /api/settings/rest-prefs — read rest-preferences.md
-router.get('/rest-prefs', (req, res) => {
-  try { res.json({ content: fs.readFileSync(REST_PREFS_PATH, 'utf8') }); }
-  catch { res.json({ content: '' }); }
-});
+// Markdown file endpoints (read/write USER/*.md)
+// Reads via readUserFile so files in the dev-repo USER/ are visible before
+// the user saves for the first time (same two-path fallback as context.js).
+// Writes go to userPath() (Electron data dir) which takes priority thereafter.
+function mdRoutes(writePath, filename) {
+  return [
+    (req, res) => res.json({ content: readUserFile(filename) }),
+    (req, res) => {
+      const { content } = req.body;
+      if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
+      ensureUserDir();
+      fs.writeFileSync(writePath, content, 'utf8');
+      res.json({ ok: true });
+    },
+  ];
+}
 
-// POST /api/settings/rest-prefs — write rest-preferences.md
-router.post('/rest-prefs', (req, res) => {
-  const { content } = req.body;
-  if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
-  ensureUserDir();
-  fs.writeFileSync(REST_PREFS_PATH, content, 'utf8');
-  res.json({ ok: true });
-});
+const [getRest,      postRest]      = mdRoutes(REST_PREFS_PATH,      'rest-preferences.md');
+const [getStory,     postStory]     = mdRoutes(STORY_INTERESTS_PATH,  'story-interests.md');
+const [getRoutines,  postRoutines]  = mdRoutes(ROUTINES_PATH,         'routines.md');
+const [getMoodRules, postMoodRules] = mdRoutes(MOOD_RULES_PATH,       'mood-rules.md');
+const [getTaste,     postTaste]     = mdRoutes(TASTE_PATH,            'taste.md');
 
-// GET /api/settings/story-interests — read story-interests.md
-router.get('/story-interests', (req, res) => {
-  try { res.json({ content: fs.readFileSync(STORY_INTERESTS_PATH, 'utf8') }); }
-  catch { res.json({ content: '' }); }
-});
-
-// POST /api/settings/story-interests — write story-interests.md
-router.post('/story-interests', (req, res) => {
-  const { content } = req.body;
-  if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
-  ensureUserDir();
-  fs.writeFileSync(STORY_INTERESTS_PATH, content, 'utf8');
-  res.json({ ok: true });
-});
+router.get('/rest-prefs',      getRest);       router.post('/rest-prefs',      postRest);
+router.get('/story-interests', getStory);      router.post('/story-interests', postStory);
+router.get('/routines',        getRoutines);   router.post('/routines',        postRoutines);
+router.get('/mood-rules',      getMoodRules);  router.post('/mood-rules',      postMoodRules);
+router.get('/taste',           getTaste);      router.post('/taste',           postTaste);
 
 // POST /api/settings/queue/clear — flush queue
 router.post('/queue/clear', (req, res) => {

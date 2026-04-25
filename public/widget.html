@@ -663,6 +663,9 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [promptDraft, setPromptDraft]               = useState('');
   const [restPrefsDraft, setRestPrefsDraft]         = useState('');
   const [storyInterestsDraft, setStoryInterestsDraft] = useState('');
+  const [routinesDraft, setRoutinesDraft]           = useState('');
+  const [moodRulesDraft, setMoodRulesDraft]         = useState('');
+  const [tasteDraft, setTasteDraft]                 = useState('');
   const [locationDraft, setLocationDraft]           = useState('');
   const [plugins, setPlugins]                       = useState([]);
   const [addingPlugin, setAddingPlugin]             = useState(false);
@@ -685,7 +688,10 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       fetch('/api/settings/story-interests').then(r => r.ok ? r.json() : Promise.reject(r.status)),
       fetch('/api/plugins').then(r => r.ok ? r.json() : []),
       fetch('/api/music-connectors').then(r => r.ok ? r.json() : []),
-    ]).then(([settingsRes, authRes, prefsRes, storyRes, pluginsRes, connectorsRes]) => {
+      fetch('/api/settings/routines').then(r => r.ok ? r.json() : {}),
+      fetch('/api/settings/mood-rules').then(r => r.ok ? r.json() : {}),
+      fetch('/api/settings/taste').then(r => r.ok ? r.json() : {}),
+    ]).then(([settingsRes, authRes, prefsRes, storyRes, pluginsRes, connectorsRes, routinesRes, moodRes, tasteRes]) => {
       const settings = settingsRes.status === 'fulfilled' ? settingsRes.value : {};
       const authStatus = authRes.status === 'fulfilled' ? authRes.value : {};
       const restPrefs = prefsRes.status === 'fulfilled' ? prefsRes.value : { content: '' };
@@ -697,6 +703,9 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       setPromptDraft(settings.prompt ?? '');
       setRestPrefsDraft(restPrefs.content ?? '');
       setStoryInterestsDraft(storyInterests.content ?? '');
+      setRoutinesDraft(routinesRes.status === 'fulfilled' ? (routinesRes.value.content ?? '') : '');
+      setMoodRulesDraft(moodRes.status === 'fulfilled' ? (moodRes.value.content ?? '') : '');
+      setTasteDraft(tasteRes.status === 'fulfilled' ? (tasteRes.value.content ?? '') : '');
       setLocationDraft(settings.location ?? '');
       setPlugins(pluginsRes.status === 'fulfilled' ? pluginsRes.value : []);
       setMusicConnectors(connectorsRes.status === 'fulfilled' ? connectorsRes.value : []);
@@ -738,6 +747,18 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
 
   const saveStoryInterests = () => {
     fetch('/api/settings/story-interests', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: storyInterestsDraft }) });
+  };
+
+  const saveRoutines = () => {
+    fetch('/api/settings/routines', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: routinesDraft }) });
+  };
+
+  const saveMoodRules = () => {
+    fetch('/api/settings/mood-rules', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: moodRulesDraft }) });
+  };
+
+  const saveTaste = () => {
+    fetch('/api/settings/taste', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: tasteDraft }) });
   };
 
   const saveLocation = () => {
@@ -1085,6 +1106,36 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               value={storyInterestsDraft}
               onChange={e => setStoryInterestsDraft(e.target.value)}
               onBlur={saveStoryInterests}/>
+          </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
+            <div className="settings-row-label" style={{ marginBottom:6 }}>Listening routines</div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Describe your typical listening patterns — the DJ reads this to plan sessions. Saved to <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>routines.md</code></div>
+            <textarea className="settings-textarea" style={{ minHeight: 110 }}
+              placeholder="e.g. I usually work 9–5 Mon–Fri. Mornings I want energy, afternoons focus music, evenings chill. Weekends are for exploring new artists."
+              value={routinesDraft}
+              onChange={e => setRoutinesDraft(e.target.value)}
+              onBlur={saveRoutines}/>
+          </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
+            <div className="settings-row-label" style={{ marginBottom:6 }}>Mood rules</div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Override the DJ's default energy logic for specific situations. Saved to <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>mood-rules.md</code></div>
+            <textarea className="settings-textarea" style={{ minHeight: 110 }}
+              placeholder="e.g. Never play sad songs before noon. If it's raining, lean melancholic. On Fridays, go upbeat after 4pm."
+              value={moodRulesDraft}
+              onChange={e => setMoodRulesDraft(e.target.value)}
+              onBlur={saveMoodRules}/>
+          </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
+            <div className="settings-row-label" style={{ marginBottom:6 }}>Taste profile</div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Auto-generated from your library sync — edit to add notes, genres, or nuances the AI should know. Saved to <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>taste.md</code></div>
+            <textarea className="settings-textarea" style={{ minHeight: 140 }}
+              placeholder="Run a sync first to populate this, then add your own notes…"
+              value={tasteDraft}
+              onChange={e => setTasteDraft(e.target.value)}
+              onBlur={saveTaste}/>
           </div>
         </div>
 

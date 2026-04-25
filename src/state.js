@@ -209,6 +209,46 @@ export function getRecentSuggestions(limit = 60) {
   `).all(limit);
 }
 
+// All unique suggestions made today (local time) — used for strict same-day dedup
+export function getTodaySuggestions() {
+  return db.prepare(`
+    SELECT title, artist FROM (
+      SELECT title, artist, MAX(suggested_at) AS last
+      FROM suggestions
+      WHERE date(suggested_at, 'unixepoch', 'localtime') = date('now', 'localtime')
+      GROUP BY lower(title), lower(artist)
+      ORDER BY last DESC
+    )
+  `).all();
+}
+
+// Suggestions from before today — softer cross-session context
+export function getCrossSessionSuggestions(limit = 25) {
+  return db.prepare(`
+    SELECT title, artist FROM (
+      SELECT title, artist, MAX(suggested_at) AS last
+      FROM suggestions
+      WHERE date(suggested_at, 'unixepoch', 'localtime') < date('now', 'localtime')
+      GROUP BY lower(title), lower(artist)
+      ORDER BY last DESC
+    ) LIMIT ?
+  `).all(limit);
+}
+
+// Feedback aggregated by artist — stronger signal than per-track lists
+export function getArtistFeedback() {
+  return db.prepare(`
+    SELECT
+      artist,
+      SUM(CASE WHEN rating = 'like'    THEN 1 ELSE 0 END) AS likes,
+      SUM(CASE WHEN rating = 'dislike' THEN 1 ELSE 0 END) AS dislikes
+    FROM feedback
+    WHERE trim(artist) != ''
+    GROUP BY lower(trim(artist))
+    ORDER BY likes DESC, dislikes DESC
+  `).all();
+}
+
 // ─── Feedback ─────────────────────────────────────────────────────────────────
 export function recordFeedback({ videoId, title, artist, rating }) {
   db.prepare(`
