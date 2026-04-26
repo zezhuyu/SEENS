@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getRecentMessages, getRecentPlays, peekNext, getPref, getTodaySuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback } from './state.js';
+import { getSessionMessages, getRecentPlays, peekNext, getQueueTracks, getPref, getSessionSuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback, getSessionContext } from './state.js';
 import { getWeatherContext } from './weather.js';
 import { getLocation } from './location.js';
 import { readUserFile, readUserJSON } from './paths.js';
@@ -86,22 +86,28 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     : null;
   const activeSong = nowPlaying ?? queuedNow;
 
-  const messages = getRecentMessages(4);
+  const messages = getSessionMessages(30);
   const memory = [
     activeSong
       ? `Currently playing: "${activeSong.resolvedTitle ?? activeSong.title}" by ${activeSong.resolvedArtist ?? activeSong.artist ?? 'unknown'} — the user is listening to this RIGHT NOW`
       : '',
     recentHistory.length ? `Recent plays (already finished):\n${recentHistory.map(p => `- "${p.title}" by ${p.artist ?? 'unknown'}`).join('\n')}` : '',
-    messages.length ? `Recent conversation:\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` : '',
+    messages.length ? `This session's conversation (mood instructions and requests set here carry through the whole session):\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n') || '(No listening history yet)';
 
-  // Fragment 5b — Suggestion history: today (strict) + cross-session (soft)
-  const todaySuggestions = getTodaySuggestions();
+  // Fragment 5b — Suggestion history: queued (hard block) + session (hard block) + cross-session (soft)
+  const queuedTracks            = getQueueTracks();
+  const sessionSuggestions      = getSessionSuggestions();
   const crossSessionSuggestions = getCrossSessionSuggestions(25);
   const suggestionHistory = [
-    todaySuggestions.length
-      ? `Tracks already suggested TODAY — do not suggest these again under any circumstances:\n${
-          todaySuggestions.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
+    queuedTracks.length
+      ? `Tracks CURRENTLY IN THE QUEUE and about to play — NEVER suggest these, they are already planned:\n${
+          queuedTracks.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
+        }`
+      : '',
+    sessionSuggestions.length
+      ? `Tracks already suggested THIS SESSION — NEVER suggest any of these again, no exceptions:\n${
+          sessionSuggestions.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
         }`
       : '',
     crossSessionSuggestions.length
@@ -151,6 +157,7 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
   const topArtistsCtx  = buildTopArtistsContext(readUserJSON('top-artists.json'));
 
   const pluginCtx = pluginSystemContext();
+  const sessionCtx = getSessionContext();
 
   return [
     persona,
@@ -162,6 +169,7 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     discoveriesCtx ? '## Discoverable Tracks\n'   + discoveriesCtx : '',
     '## Environment\n' + env,
     calendarContext ? '## Today\'s Schedule\n' + calendarContext : '',
+    sessionCtx ? '## Session Context\nThe user has told you the following about their current activity or mood — honor this throughout the session:\n' + sessionCtx : '',
     '## Memory\n' + memory,
     suggestionHistory ? '## Suggestion History\n' + suggestionHistory : '',
     feedbackSummary   ? '## User Feedback\n'       + feedbackSummary   : '',

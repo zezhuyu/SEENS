@@ -1,7 +1,7 @@
 import { generate, getActiveAgent } from './ai/index.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
-import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref } from './state.js';
+import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setSessionContext } from './state.js';
 import { broadcast } from './ws-broadcast.js';
 import { resolveTracksOrdered } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
@@ -95,6 +95,12 @@ export async function handleInput(input, triggerType = 'user-chat') {
     // 'info' — data is reflected in djResponse.say, no extra action needed
   }
 
+  // Persist session context if the AI captured new info from this message
+  if (djResponse.sessionContext) {
+    setSessionContext(djResponse.sessionContext);
+    broadcast('session-context', { context: djResponse.sessionContext });
+  }
+
   // Note: finalSay may be corrected after resolve — message stored after resolve step
 
   // Resolve tracks + synthesize TTS in parallel
@@ -102,7 +108,10 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // Song intros always get TTS regardless.
   const hasTracks = djResponse.play?.length > 0;
   const chatSpeakOn = getPref('tts.chatSpeak', '1') !== '0';
-  const shouldSynthesize = !!djResponse.say && (hasTracks || chatSpeakOn);
+  const isAutoRefill = triggerType === 'auto-refill';
+  // Auto-refills queue tracks silently — TTS fires via the transition mechanism (pendingIntroTTS)
+  // when the last current song is nearly done. Generating it here would race and steal the intro.
+  const shouldSynthesize = !!djResponse.say && (hasTracks || chatSpeakOn) && !isAutoRefill;
 
   console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS in parallel${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
   const [resolveResult, ttsResult] = await Promise.allSettled([
@@ -128,7 +137,6 @@ export async function handleInput(input, triggerType = 'user-chat') {
     resolvedTracks = resolveResult.value;
     try {
       addToQueue(resolvedTracks);
-      recordSuggestions(resolvedTracks);
       console.log(`[Router:${triggerType}] ${ts()} resolve done — ${resolvedTracks.length}/${djResponse.play?.length ?? 0} tracks (intent=${intent})`);
       prewarmCache(resolvedTracks.map(t => t.videoId));
     } catch (err) {
@@ -137,6 +145,13 @@ export async function handleInput(input, triggerType = 'user-chat') {
   } else {
     console.warn(`[Router:${triggerType}] ${ts()} resolve failed:`, resolveResult.reason?.message);
     try { addToQueue(djResponse.play.map(t => ({ source: t.source ?? 'any', title: t.title, artist: t.artist ?? '', uri: null }))); } catch {}
+  }
+
+  // Always record every suggested track so the dedup list stays accurate.
+  // Use resolved titles when available (more canonical); fall back to the raw AI suggestion.
+  const tracksToRecord = resolvedTracks.length > 0 ? resolvedTracks : (djResponse.play ?? []);
+  try { recordSuggestions(tracksToRecord); } catch (err) {
+    console.warn(`[Router:${triggerType}] recordSuggestions failed:`, err.message);
   }
 
   const firstTrack = resolvedTracks[0] ?? null;

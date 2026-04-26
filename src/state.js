@@ -113,7 +113,39 @@ export function getRecentMessages(limit = 10) {
   return db.prepare('SELECT role, content FROM messages ORDER BY id DESC LIMIT ?').all(limit).reverse();
 }
 
+// Mark the start of a new listening session (recorded as unix epoch in prefs)
+export function setSessionStart() {
+  setPref('session.started_at', String(Math.floor(Date.now() / 1000)));
+  setPref('session.context', ''); // fresh context for each session
+}
+
+// DJ-extracted summary of what the user is doing / their mood for this session
+export function getSessionContext() {
+  return getPref('session.context', '') || null;
+}
+
+export function setSessionContext(context) {
+  if (typeof context === 'string' && context.trim()) {
+    setPref('session.context', context.trim());
+  }
+}
+
+// All messages since the current session started (falls back to recent messages if no session marked)
+export function getSessionMessages(max = 30) {
+  const startedAt = parseInt(getPref('session.started_at', '0')) || 0;
+  if (!startedAt) return getRecentMessages(max);
+  return db.prepare(
+    'SELECT role, content FROM messages WHERE ts >= ? ORDER BY id DESC LIMIT ?'
+  ).all(startedAt, max).reverse();
+}
+
 // ─── Queue ────────────────────────────────────────────────────────────────────
+
+// All tracks currently in the queue (not yet played) — used to prevent re-suggestions
+export function getQueueTracks() {
+  return db.prepare('SELECT title, artist FROM queue ORDER BY position ASC').all();
+}
+
 const QUEUE_INSERT_SQL = `
   INSERT INTO queue
     (position, track_id, source, title, artist, uri, video_id, stream_url, preview_url, artwork_url, resolved_title, resolved_artist)
@@ -209,7 +241,24 @@ export function getRecentSuggestions(limit = 60) {
   `).all(limit);
 }
 
-// All unique suggestions made today (local time) — used for strict same-day dedup
+// All unique suggestions made in the current session (since session.started_at).
+// Falls back to today's suggestions when no session has been started.
+// Used as the strict same-session dedup block — the AI must never repeat these.
+export function getSessionSuggestions() {
+  const startedAt = parseInt(getPref('session.started_at', '0')) || 0;
+  if (!startedAt) return getTodaySuggestions();
+  return db.prepare(`
+    SELECT title, artist FROM (
+      SELECT title, artist, MAX(suggested_at) AS last
+      FROM suggestions
+      WHERE suggested_at >= ?
+      GROUP BY lower(title), lower(artist)
+      ORDER BY last DESC
+    )
+  `).all(startedAt);
+}
+
+// All unique suggestions made today (local time)
 export function getTodaySuggestions() {
   return db.prepare(`
     SELECT title, artist FROM (

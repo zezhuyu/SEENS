@@ -1,6 +1,6 @@
 import express from 'express';
 import fs from 'fs';
-import { getPref, setPref, clearQueue } from '../src/state.js';
+import { getPref, setPref, clearQueue, setSessionStart, getSessionContext } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgent } from '../src/ai/index.js';
 import { ensureUserDir, userPath, readUserFile } from '../src/paths.js';
 
@@ -106,6 +106,17 @@ router.get('/taste',           getTaste);      router.post('/taste',           p
 router.post('/queue/clear', (req, res) => {
   clearQueue();
   res.json({ ok: true });
+});
+
+// POST /api/settings/session/start — mark session start so the DJ remembers all instructions from it
+router.post('/session/start', (req, res) => {
+  setSessionStart();
+  res.json({ ok: true });
+});
+
+// GET /api/settings/session/context — current session context the DJ has captured
+router.get('/session/context', (req, res) => {
+  res.json({ context: getSessionContext() });
 });
 
 export default router;
