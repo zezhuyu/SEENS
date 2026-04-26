@@ -1,7 +1,7 @@
 import { generate, getActiveAgent } from './ai/index.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
-import { addMessage, enqueue, enqueueNext, recordSuggestions } from './state.js';
+import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref } from './state.js';
 import { broadcast } from './ws-broadcast.js';
 import { resolveTracksOrdered } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
@@ -98,15 +98,20 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // Note: finalSay may be corrected after resolve — message stored after resolve step
 
   // Resolve tracks + synthesize TTS in parallel
-  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS in parallel`);
+  // For conversational responses (no tracks), respect the chatSpeak preference.
+  // Song intros always get TTS regardless.
+  const hasTracks = djResponse.play?.length > 0;
+  const chatSpeakOn = getPref('tts.chatSpeak', '1') !== '0';
+  const shouldSynthesize = !!djResponse.say && (hasTracks || chatSpeakOn);
+
+  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS in parallel${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
   const [resolveResult, ttsResult] = await Promise.allSettled([
-    djResponse.play?.length ? resolveTracksOrdered(djResponse.play) : Promise.resolve([]),
-    djResponse.say ? synthesize(djResponse.say) : Promise.resolve(null),
+    hasTracks ? resolveTracksOrdered(djResponse.play) : Promise.resolve([]),
+    shouldSynthesize ? synthesize(djResponse.say) : Promise.resolve(null),
   ]);
 
   let resolvedTracks = [];
-  // User-chat requests default to 'now' so the song plays immediately unless AI says otherwise
-  const defaultIntent = triggerType === 'user-chat' ? 'now' : 'end';
+  const defaultIntent = (triggerType === 'user-chat' && hasTracks) ? 'now' : 'end';
   let intent = djResponse.playIntent ?? defaultIntent;
 
   // Keyword override: user's phrasing is more reliable than AI intent inference

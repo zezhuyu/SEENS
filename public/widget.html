@@ -733,6 +733,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
     }
     if ('tts.voice'   in patch) body['tts.voice']   = patch['tts.voice'];
     if ('mood.energy' in patch) body['mood.energy']  = patch['mood.energy'];
+    if ('chatSpeak'   in patch) body.chatSpeak       = patch.chatSpeak;
     fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
   };
 
@@ -1069,6 +1070,16 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               {voiceOptions.map(v => <option key={v} value={v}>{voiceLabel(v)}</option>)}
             </select>
           </div>
+          <div className="settings-row">
+            <div className="settings-row-label">Speak answers</div>
+            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
+              <input type="checkbox"
+                checked={s.chatSpeak !== false}
+                onChange={e => save({ chatSpeak: e.target.checked })}
+                style={{ accentColor:'var(--accent)', width:14, height:14 }}/>
+              <span style={{ fontSize:12, color:'var(--ink-2)' }}>DJ reads chat answers aloud</span>
+            </label>
+          </div>
           <div className="settings-row" style={{ alignItems:'flex-start', flexDirection:'column', gap:8 }}>
             <div className="settings-row-label">Energy</div>
             <div className="settings-chips">
@@ -1387,6 +1398,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const [restPiece, setRestPiece]       = useState(null);
   const [restPieceLoading, setRestPieceLoading] = useState(false);
   const prefetchedRestRef               = useRef(null); // { piece, ttsUrl } — pre-loaded before break
+  const restSessionRef                  = useRef(0);    // incremented each time a rest begins; guards stale fetches
   const [activeTab, setActiveTab]       = useState('queue');
   const [djMessages, setDjMessages]     = useState([]);
   const [djText, setDjText]             = useState('Waiting for DJ...');
@@ -1705,6 +1717,9 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     if (resting) {
       preRestSizeRef.current = size;
       if (size === 'mini') setSize('expanded');
+      // Stamp this rest session so async callbacks can detect they've gone stale
+      restSessionRef.current += 1;
+      const sessionId = restSessionRef.current;
       // Use prefetched piece, or a plugin-sourced piece, or fetch from API
       const cached = prefetchedRestRef.current;
       if (cached && cached !== 'loading' && cached.piece) {
@@ -1722,8 +1737,16 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         const cat = categoryFilter !== 'All' ? `?cat=${encodeURIComponent(categoryFilter)}` : '';
         fetch(`/api/rest-piece${cat}`)
           .then(r => r.json())
-          .then(p => { setRestPiece(p.error ? { _error: p.error } : p); setRestPieceLoading(false); })
-          .catch(e => { setRestPiece({ _error: e.message ?? 'Failed to load' }); setRestPieceLoading(false); });
+          .then(p => {
+            if (restSessionRef.current !== sessionId) return; // stale — a newer rest has started
+            setRestPiece(p.error ? { _error: p.error } : p);
+            setRestPieceLoading(false);
+          })
+          .catch(e => {
+            if (restSessionRef.current !== sessionId) return;
+            setRestPiece({ _error: e.message ?? 'Failed to load' });
+            setRestPieceLoading(false);
+          });
       }
     } else {
       if (preRestSizeRef.current && preRestSizeRef.current !== size) setSize(preRestSizeRef.current);
@@ -1766,16 +1789,18 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 
   // ── DJ narration when artwork is revealed (placed after enqueueTTS so we can use it)
   const narratedPieceRef = useRef(null);
+  const narratePollRef   = useRef(null); // tracks the narration-prefetch poll so it can be cancelled
   useEffect(() => {
     if (restPhase !== 'reveal' || !restPiece || restPiece._error) return;
     if (narratedPieceRef.current === restPiece) return; // already narrated this piece
     narratedPieceRef.current = restPiece;
+    const pieceSnapshot = restPiece; // capture so async callbacks can detect staleness
 
     // Wait for the artwork fade-in transition (0.65s CSS) to finish before speaking
     const revealDelay = setTimeout(() => {
       // Use prefetched TTS if already available for this piece
       const cached = prefetchedRestRef.current;
-      if (cached && cached !== 'loading' && cached.piece === restPiece && cached.ttsUrl) {
+      if (cached && cached !== 'loading' && cached.piece === pieceSnapshot && cached.ttsUrl) {
         console.log('[Narrate] using prefetched TTS:', cached.ttsUrl);
         enqueueTTS(cached.ttsUrl);
         prefetchedRestRef.current = null; // consumed
@@ -1785,7 +1810,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       // If prefetch is still in-flight, wait briefly for it then fall back to fresh fetch
       const tryEnqueue = () => {
         const c = prefetchedRestRef.current;
-        if (c && c !== 'loading' && c.piece === restPiece && c.ttsUrl) {
+        if (c && c !== 'loading' && c.piece === pieceSnapshot && c.ttsUrl) {
           console.log('[Narrate] prefetch caught up:', c.ttsUrl);
           enqueueTTS(c.ttsUrl);
           prefetchedRestRef.current = null;
@@ -1797,27 +1822,36 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       // Poll briefly (up to 5s) for in-flight prefetch to complete, then fall back
       let attempts = 0;
       const poll = setInterval(() => {
+        // Bail if the user has moved on to a different piece
+        if (narratedPieceRef.current !== pieceSnapshot) { clearInterval(poll); narratePollRef.current = null; return; }
         attempts++;
-        if (tryEnqueue()) { clearInterval(poll); return; }
+        if (tryEnqueue()) { clearInterval(poll); narratePollRef.current = null; return; }
         if (attempts >= 10) {
           clearInterval(poll);
+          narratePollRef.current = null;
+          if (narratedPieceRef.current !== pieceSnapshot) return; // stale
           console.log('[Narrate] prefetch not ready — fetching fresh narration');
           fetch('/api/rest-narrate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ piece: restPiece }),
+            body: JSON.stringify({ piece: pieceSnapshot }),
           })
             .then(r => r.ok ? r.json() : null)
             .then(data => {
-              if (!data?.url) { console.warn('[Narrate] no TTS url returned'); return; }
+              if (!data?.url || narratedPieceRef.current !== pieceSnapshot) return; // stale
               enqueueTTS(data.url);
             })
             .catch(err => console.warn('[Narrate] fetch error:', err.message));
         }
       }, 500);
+      narratePollRef.current = poll;
     }, 800); // wait for artwork fade-in to complete before speaking
 
-    return () => clearTimeout(revealDelay);
+    return () => {
+      clearTimeout(revealDelay);
+      clearInterval(narratePollRef.current);
+      narratePollRef.current = null;
+    };
   }, [restPhase, restPiece, enqueueTTS]);
 
   const updateUpNext = useCallback((upNext) => {
@@ -2048,10 +2082,15 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         }
       } else if (audioActive && userAsked) {
         if (intent === 'now') {
-          if (msg.firstTrack) coldStartTrackRef.current = msg.firstTrack;
-          else skipAfterTTSRef.current = true;
-          if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
-          else skipNextRef.current();
+          if (msg.firstTrack) {
+            // DJ introduced a new track — speak intro then switch
+            coldStartTrackRef.current = msg.firstTrack;
+            if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
+            else skipNextRef.current();
+          } else {
+            // Conversational response (no new track) — just speak TTS, keep current song playing
+            if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
+          }
         } else if (intent === 'next') {
           if (msg.ttsUrl) { pendingIntroTTSRef.current = msg.ttsUrl; transitionReqRef.current = true; }
           const nt = msg.firstTrack ?? msg.play?.[0];
@@ -2180,6 +2219,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         .catch(() => { preBreakWindowSize.current = { width: 380, height: 700 }; });
       window.__electron__.resizeWindow(460, 820);
     }
+    setSessionSecs(0); // reset so the rest auto-end timer always counts from 0
     setResting(true);
     if (skipTransition) {
       // Manual "Take a break" — go straight to artwork
@@ -2193,10 +2233,15 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 
   const endRest = useCallback(() => {
     clearTimeout(restPhaseTimer.current);
+    clearInterval(narratePollRef.current);
+    narratePollRef.current = null;
     ttsRef.current.pause();
     ttsRef.current.src = '';
+    ttsQueueRef.current         = []; // discard any queued narration so it can't play after rest ends
+    ttsPlayingRef.current       = false;
     narratedPieceRef.current    = null;
     prefetchedRestRef.current   = null;
+    restSessionRef.current     += 1;  // invalidate any in-flight piece fetch
     setResting(false);
     setRestPhase(null);
     setSessionSecs(0);
@@ -2296,6 +2341,14 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     fetch('/api/settings/queue/clear', { method: 'POST' }).catch(() => {});
   }, []);
   const nextPiece = () => {
+    // Cancel any in-flight narration for the current piece before replacing it
+    clearInterval(narratePollRef.current);
+    narratePollRef.current = null;
+    narratedPieceRef.current = null; // allow the next piece to be narrated
+    ttsRef.current.pause();
+    ttsRef.current.src = '';
+    ttsQueueRef.current   = []; // discard queued narration for the piece we're leaving
+    ttsPlayingRef.current = false;
     setRestPieceLoading(true);
     setRestPiece(null);
     const cat = categoryFilter !== 'All' ? `?cat=${encodeURIComponent(categoryFilter)}` : '';
@@ -2673,7 +2726,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       <BreakTransition restDurationMin={restDurationMin}/>
 
       {/* Art reveal */}
-      <ArtReveal piece={restPiece} loading={restPieceLoading} onDismiss={endRest} onReturn={returnRest} onNext={nextPiece}/>
+      <ArtReveal piece={restPiece} loading={restPieceLoading} onDismiss={endRest} onReturn={endRest} onNext={nextPiece}/>
 
       {/* Return to work overlay */}
       <ReturnToWork onReturn={endRest}/>

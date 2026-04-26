@@ -55,12 +55,19 @@ export async function syncPlaylists() {
   return tracks;
 }
 
-export async function getRecommendations(seedTracks = [], seedArtists = []) {
-  const params = new URLSearchParams({ limit: '20' });
-  if (seedTracks.length) params.set('seed_tracks', seedTracks.slice(0, 3).join(','));
-  if (seedArtists.length) params.set('seed_artists', seedArtists.slice(0, 2).join(','));
-  const data = await spotifyFetch(`/recommendations?${params}`);
+// Fetch an artist's top tracks — used to discover catalog beyond the synced library.
+// market defaults to 'from_token' which uses the user's Spotify country.
+export async function getArtistTopTracks(artistId) {
+  const data = await spotifyFetch(`/artists/${artistId}/top-tracks?market=from_token`);
   return (data.tracks ?? []).map(t => normalizeTrack(t, 'spotify'));
+}
+
+// Fetch artists similar to a given one — used to broaden discovery to new artists.
+export async function getRelatedArtists(artistId) {
+  const data = await spotifyFetch(`/artists/${artistId}/related-artists`);
+  return (data.artists ?? []).slice(0, 5).map(a => ({
+    id: a.id, name: a.name, genres: a.genres ?? [],
+  }));
 }
 
 function normalizeTrack(t, source) {

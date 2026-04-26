@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getRecentMessages, getRecentPlays, getPref, getTodaySuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback } from './state.js';
+import { getRecentMessages, getRecentPlays, peekNext, getPref, getTodaySuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback } from './state.js';
 import { getWeatherContext } from './weather.js';
 import { getLocation } from './location.js';
 import { readUserFile, readUserJSON } from './paths.js';
@@ -75,11 +75,23 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
   if (weather) envParts.push(`Weather: ${weather}`);
   const env = envParts.join('\n');
 
-  // Fragment 4 — Memory (recent plays + messages)
-  const plays = getRecentPlays(6);
+  // Fragment 4 — Memory (currently playing + recent plays + messages)
+  const plays = getRecentPlays(7); // [0] = currently playing, [1..] = history
+  const nowPlaying = plays[0] ?? null;
+  const recentHistory = plays.slice(1);
+  // Also surface the queued-but-not-yet-dequeued track if the DB has one
+  const queued = peekNext();
+  const queuedNow = !nowPlaying && queued[0]
+    ? { title: queued[0].resolved_title ?? queued[0].title, artist: queued[0].resolved_artist ?? queued[0].artist }
+    : null;
+  const activeSong = nowPlaying ?? queuedNow;
+
   const messages = getRecentMessages(4);
   const memory = [
-    plays.length ? `Recent plays:\n${plays.map(p => `- ${p.title} by ${p.artist ?? 'unknown'} (${p.source})`).join('\n')}` : '',
+    activeSong
+      ? `Currently playing: "${activeSong.resolvedTitle ?? activeSong.title}" by ${activeSong.resolvedArtist ?? activeSong.artist ?? 'unknown'} — the user is listening to this RIGHT NOW`
+      : '',
+    recentHistory.length ? `Recent plays (already finished):\n${recentHistory.map(p => `- "${p.title}" by ${p.artist ?? 'unknown'}`).join('\n')}` : '',
     messages.length ? `Recent conversation:\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n') || '(No listening history yet)';
 
@@ -133,8 +145,10 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
   // Fragment 7 — Custom user instructions
   const customPrompt = getPref('user.prompt', '').trim();
 
-  // Fragment 8 — User's actual music library (prefer these tracks when relevant)
-  const libraryCtx = buildLibraryContext(readUserJSON('playlists.json'));
+  // Fragment 8 — User's actual music library + expanded discoveries + Spotify listening rank
+  const libraryCtx     = buildLibraryContext(readUserJSON('playlists.json'), artistFeedback);
+  const discoveriesCtx = buildDiscoveriesContext(readUserJSON('discoveries.json'));
+  const topArtistsCtx  = buildTopArtistsContext(readUserJSON('top-artists.json'));
 
   const pluginCtx = pluginSystemContext();
 
@@ -143,7 +157,9 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     '---\n## User Taste Profile\n' + taste,
     routines ? '## Routines\n' + routines : '',
     moodRules ? '## Mood Rules\n' + moodRules : '',
-    libraryCtx ? '## User\'s Music Library\n' + libraryCtx : '',
+    topArtistsCtx  ? '## Spotify Listening Rank\n' + topArtistsCtx  : '',
+    libraryCtx     ? '## User\'s Music Library\n'  + libraryCtx     : '',
+    discoveriesCtx ? '## Discoverable Tracks\n'   + discoveriesCtx : '',
     '## Environment\n' + env,
     calendarContext ? '## Today\'s Schedule\n' + calendarContext : '',
     '## Memory\n' + memory,
@@ -164,10 +180,10 @@ function getSeason(date) {
   return 'Winter';
 }
 
-// Groups the synced library by artist and formats it compactly for the AI.
-// The AI should prefer these tracks when they fit the mood — they are verified
-// to exist in the user's collection and will resolve cleanly.
-function buildLibraryContext(playlists) {
+// Groups the synced library by artist for the AI.
+// Sorted by user preference: artists with explicit likes first, then by track count.
+// Liked artists are annotated so the AI can weight them appropriately.
+function buildLibraryContext(playlists, artistFeedback = []) {
   if (!Array.isArray(playlists) || !playlists.length) return null;
 
   const byArtist = new Map();
@@ -180,14 +196,77 @@ function buildLibraryContext(playlists) {
   }
   if (!byArtist.size) return null;
 
+  // Build lookup: artist name (lowercase) → like/dislike counts from feedback
+  const fbMap = new Map(
+    artistFeedback.map(a => [a.artist.toLowerCase().trim(), a])
+  );
+
   const total = [...byArtist.values()].reduce((s, v) => s + v.length, 0);
   const lines = [...byArtist.entries()]
-    .sort((a, b) => b[1].length - a[1].length) // most tracks first
-    .map(([artist, titles]) => `${artist}: ${titles.map(t => `"${t}"`).join(', ')}`);
+    .sort(([aName, aTracks], [bName, bTracks]) => {
+      const aLikes = fbMap.get(aName.toLowerCase())?.likes ?? 0;
+      const bLikes = fbMap.get(bName.toLowerCase())?.likes ?? 0;
+      if (bLikes !== aLikes) return bLikes - aLikes; // liked artists first
+      return bTracks.length - aTracks.length;         // then by track count
+    })
+    .map(([artist, titles]) => {
+      const fb = fbMap.get(artist.toLowerCase());
+      const tag = fb?.likes ? ` [${fb.likes} liked${fb.dislikes ? `, ${fb.dislikes} skipped` : ''}]` : '';
+      return `${artist}${tag}: ${titles.map(t => `"${t}"`).join(', ')}`;
+    });
 
   return (
-    `These ${total} tracks across ${byArtist.size} artists are in the user's actual library — ` +
-    `strongly prefer suggesting from these when they fit the mood:\n` +
+    `${total} tracks across ${byArtist.size} artists in the user's collection ` +
+    `(sorted by preference — liked artists shown first with [N liked] tags):\n` +
     lines.join('\n')
   );
+}
+
+// Formats the user's Spotify top-artist list (rank = listening frequency order from Spotify).
+// This is the strongest behavioral signal: who the user actually plays the most.
+function buildTopArtistsContext(topArtists) {
+  if (!Array.isArray(topArtists) || !topArtists.length) return null;
+  const lines = topArtists.slice(0, 20).map(a => {
+    const genres = a.genres?.slice(0, 3).join(', ');
+    return `${a.rank}. ${a.name}${genres ? ` (${genres})` : ''}`;
+  });
+  return (
+    `The user's ${lines.length} most-listened artists on Spotify, ranked by actual listening frequency — ` +
+    `these are the strongest taste signal:\n` +
+    lines.join('\n')
+  );
+}
+
+// Formats the expanded catalog (artist top tracks + related artist tracks) for the AI.
+// These are good discovery picks — the user loves these artists but may not own all songs.
+function buildDiscoveriesContext(discoveries) {
+  if (!Array.isArray(discoveries) || !discoveries.length) return null;
+
+  const fromTopArtists = new Map();
+  const fromRelated    = new Map();
+
+  for (const t of discoveries) {
+    const artist = t.artist?.trim();
+    const title  = t.title?.trim();
+    if (!artist || !title) continue;
+    const map = t.discoverySource?.startsWith('related:') ? fromRelated : fromTopArtists;
+    if (!map.has(artist)) map.set(artist, []);
+    map.get(artist).push(title);
+  }
+
+  const parts = [];
+  if (fromTopArtists.size) {
+    const lines = [...fromTopArtists.entries()]
+      .map(([a, ts]) => `${a}: ${ts.map(t => `"${t}"`).join(', ')}`);
+    parts.push(`From your top artists (deeper cuts and less-heard tracks):\n${lines.join('\n')}`);
+  }
+  if (fromRelated.size) {
+    const lines = [...fromRelated.entries()]
+      .map(([a, ts]) => `${a}: ${ts.map(t => `"${t}"`).join(', ')}`);
+    parts.push(`From related artists (new discovery territory):\n${lines.join('\n')}`);
+  }
+
+  return parts.length
+    ? `${discoveries.length} tracks for discovery — pick freely from these to expand beyond the library:\n\n` + parts.join('\n\n')
+    : null;
 }

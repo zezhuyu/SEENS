@@ -22,6 +22,18 @@ export async function syncAll({ force = false } = {}) {
     syncService('apple', results),
   ]);
 
+  // Expand catalog: fetch top tracks from user's top artists + related artists
+  if (results.spotifyArtists?.length) {
+    try {
+      const { getArtistTopTracks, getRelatedArtists } = await import('./spotify.js');
+      const discoveries = await syncSpotifyDiscoveries(results.spotifyArtists, getArtistTopTracks, getRelatedArtists);
+      fs.writeFileSync(userPath('discoveries.json'), JSON.stringify(discoveries, null, 2));
+      console.log(`[Sync:discoveries] ${discoveries.length} tracks saved`);
+    } catch (err) {
+      console.warn('[Sync:discoveries] Failed:', err.message);
+    }
+  }
+
   // Sync any enabled custom music connectors
   const connectors = getMusicConnectors();
   const connectorResults = await Promise.all(
@@ -45,6 +57,17 @@ export async function syncAll({ force = false } = {}) {
 
   ensureUserDir();
   fs.writeFileSync(userPath('playlists.json'), JSON.stringify(deduped, null, 2));
+
+  // Persist Spotify top-artist rank so the AI can weight recommendations by listening frequency
+  if (results.spotifyArtists?.length) {
+    const topArtistsData = results.spotifyArtists.map((a, i) => ({
+      rank: i + 1,
+      name: a.name,
+      genres: a.genres ?? [],
+      popularity: a.popularity,
+    }));
+    fs.writeFileSync(userPath('top-artists.json'), JSON.stringify(topArtistsData, null, 2));
+  }
 
   const taste = generateTasteProfile(results);
   fs.writeFileSync(userPath('taste.md'), taste);
@@ -78,6 +101,44 @@ async function syncService(service, results) {
     console.warn(`[Sync:${service}] Skipped: ${err.message}`);
     results.errors.push({ service, error: err.message });
   }
+}
+
+async function syncSpotifyDiscoveries(topArtists, getArtistTopTracks, getRelatedArtists) {
+  const discoveries = [];
+  const seen = new Set();
+
+  const addTrack = (t, source) => {
+    if (!t?.title) return;
+    const key = `${t.title.toLowerCase()}::${(t.artist ?? '').toLowerCase()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      discoveries.push({ ...t, discoverySource: source });
+    }
+  };
+
+  // Top tracks from user's top 12 Spotify artists (deeper cuts beyond the synced library)
+  const primaryArtists = topArtists.slice(0, 12);
+  await Promise.all(primaryArtists.map(async (artist) => {
+    try {
+      const tracks = await getArtistTopTracks(artist.id);
+      tracks.forEach(t => addTrack(t, `top-tracks:${artist.name}`));
+    } catch {}
+  }));
+
+  // Related artists for the top 5 artists — broader discovery territory
+  const relatedSets = await Promise.all(
+    topArtists.slice(0, 5).map(a => getRelatedArtists(a.id).catch(() => []))
+  );
+  const relatedArtists = [...new Map(relatedSets.flat().map(a => [a.id, a])).values()].slice(0, 10);
+
+  await Promise.all(relatedArtists.map(async (artist) => {
+    try {
+      const tracks = (await getArtistTopTracks(artist.id)).slice(0, 5);
+      tracks.forEach(t => addTrack(t, `related:${artist.name}`));
+    } catch {}
+  }));
+
+  return discoveries;
 }
 
 function deduplicateTracks(tracks) {

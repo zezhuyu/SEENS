@@ -23,6 +23,7 @@ router.get('/', (req, res) => {
     location:    getPref('user.location',  ''),
     workMin:     parseInt(getPref('session.workMin', '45')),
     restMin:     parseInt(getPref('session.restMin', '5')),
+    chatSpeak:   getPref('tts.chatSpeak',  '1') !== '0',
     ttsProvider,
     availableAgents: AGENT_NAMES,
   });
@@ -30,10 +31,11 @@ router.get('/', (req, res) => {
 
 // POST /api/settings — update prefs
 router.post('/', (req, res) => {
-  const { 'tts.voice': voice, 'mood.energy': energy, prompt, workMin, restMin, location } = req.body;
-  if (voice    !== undefined) setPref('tts.voice',       voice);
-  if (energy   !== undefined) setPref('mood.energy',     energy);
-  if (prompt   !== undefined) setPref('user.prompt',     prompt);
+  const { 'tts.voice': voice, 'mood.energy': energy, prompt, workMin, restMin, location, chatSpeak } = req.body;
+  if (voice      !== undefined) setPref('tts.voice',       voice);
+  if (energy     !== undefined) setPref('mood.energy',     energy);
+  if (prompt     !== undefined) setPref('user.prompt',     prompt);
+  if (chatSpeak  !== undefined) setPref('tts.chatSpeak',   chatSpeak ? '1' : '0');
   if (location !== undefined) {
     const loc = location.trim();
     setPref('user.location', loc);
