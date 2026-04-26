@@ -2112,8 +2112,10 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           if (msg.ttsUrl) { pendingIntroTTSRef.current = msg.ttsUrl; transitionReqRef.current = true; }
           const nt = msg.firstTrack ?? msg.play?.[0];
           if (nt) setUpNextTrack({ title: nt.resolvedTitle??nt.title, artist: nt.resolvedArtist??nt.artist??'' });
+        } else if (intent === 'end' && msg.ttsUrl && !msg.firstTrack) {
+          // Conversational answer queued at 'end' (no new music) — speak it without interrupting playback
+          enqueueTTS(msg.ttsUrl);
         }
-        // 'end': no interruption, just show text
       } else {
         // cold start
         if (msg.ttsUrl && msg.firstTrack) {

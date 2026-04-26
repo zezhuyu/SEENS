@@ -75,24 +75,33 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
   if (weather) envParts.push(`Weather: ${weather}`);
   const env = envParts.join('\n');
 
-  // Fragment 4 — Memory (currently playing + recent plays + messages)
+  // Fragment 4 — Now playing + queue order (used for both display and conversational grounding)
   const plays = getRecentPlays(7); // [0] = currently playing, [1..] = history
   const nowPlaying = plays[0] ?? null;
   const recentHistory = plays.slice(1);
-  // Also surface the queued-but-not-yet-dequeued track if the DB has one
+  // If nothing has played yet, surface the first queued track as the active song
   const queued = peekNext();
   const queuedNow = !nowPlaying && queued[0]
     ? { title: queued[0].resolved_title ?? queued[0].title, artist: queued[0].resolved_artist ?? queued[0].artist }
     : null;
   const activeSong = nowPlaying ?? queuedNow;
 
+  // Full ordered queue (up to 6 tracks) for the "Up Next" informational block
+  // This is separate from the dedup block — it tells the AI what will play and in what order.
+  const upNextTracks = getQueueTracks().slice(0, 6);
+
+  const nowPlayingCtx = activeSong
+    ? `NOW PLAYING (the song the user is currently hearing): "${activeSong.resolvedTitle ?? activeSong.title}" by ${activeSong.resolvedArtist ?? activeSong.artist ?? 'unknown'}`
+    : null;
+
+  const upNextCtx = upNextTracks.length
+    ? `UP NEXT (queued in this order — these will play after the current song):\n${upNextTracks.map((t, i) => `${i + 1}. "${t.title}"${t.artist ? ` by ${t.artist}` : ''}`).join('\n')}`
+    : null;
+
   const messages = getSessionMessages(30);
   const memory = [
-    activeSong
-      ? `Currently playing: "${activeSong.resolvedTitle ?? activeSong.title}" by ${activeSong.resolvedArtist ?? activeSong.artist ?? 'unknown'} — the user is listening to this RIGHT NOW`
-      : '',
-    recentHistory.length ? `Recent plays (already finished):\n${recentHistory.map(p => `- "${p.title}" by ${p.artist ?? 'unknown'}`).join('\n')}` : '',
-    messages.length ? `This session's conversation (mood instructions and requests set here carry through the whole session):\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` : '',
+    recentHistory.length ? `Recently finished (already played, do not re-suggest):\n${recentHistory.map(p => `- "${p.title}" by ${p.artist ?? 'unknown'}`).join('\n')}` : '',
+    messages.length ? `This session's conversation (mood instructions set here carry through the whole session):\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n') || '(No listening history yet)';
 
   // Fragment 5b — Suggestion history: queued (hard block) + session (hard block) + cross-session (soft)
@@ -170,7 +179,9 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     '## Environment\n' + env,
     calendarContext ? '## Today\'s Schedule\n' + calendarContext : '',
     sessionCtx ? '## Session Context\nThe user has told you the following about their current activity or mood — honor this throughout the session:\n' + sessionCtx : '',
-    '## Memory\n' + memory,
+    nowPlayingCtx ? '## Now Playing\n' + nowPlayingCtx : '',
+    upNextCtx ? '## Up Next\n' + upNextCtx : '',
+    '## Session History\n' + memory,
     suggestionHistory ? '## Suggestion History\n' + suggestionHistory : '',
     feedbackSummary   ? '## User Feedback\n'       + feedbackSummary   : '',
     '## Agent Info\n' + agentInfo,
