@@ -100,31 +100,47 @@ async function searchYouTube(title, artist) {
     `${title} ${artist}`,
   ];
 
-  const words = artistWords(artist);
+  const artistWds = artistWords(artist);
 
-  // Returns true if the video title or channel name contains any artist word
-  const artistMatch = (v) => {
-    if (!words.length) return false;
+  // Significant words from the track title (strip articles, short words)
+  const STOP = new Set(['the', 'and', 'for', 'feat', 'ft', 'vs', 'with', 'a', 'an', 'in', 'of', 'to']);
+  const titleWds = title.toLowerCase().split(/[\s\-–—()\[\]]+/).filter(w => w.length > 2 && !STOP.has(w));
+
+  const score = (v) => {
     const hay = `${v.title} ${v.author?.name ?? ''}`.toLowerCase();
-    return words.some(w => hay.includes(w));
+    const artistHit = artistWds.length > 0 && artistWds.some(w => hay.includes(w));
+    const titleHit  = titleWds.length  > 0 && titleWds.some(w => hay.includes(w));
+    if (artistHit && titleHit) return 2;
+    if (artistHit)             return 1;
+    if (titleHit)              return 0;
+    return -1;
   };
 
-  let firstFallback = null;
+  let bestVideoId = null;
+  let bestScore   = -2;
 
   for (const q of queries) {
     try {
       const result = await ytSearch(q);
       const videos = result.videos?.filter(v => v.seconds > 60) ?? [];
       if (!videos.length) continue;
-      if (!firstFallback) firstFallback = videos[0].videoId; // save in case nothing verifies
-      const match = videos.find(v => artistMatch(v));
-      if (match) {
-        console.log(`[Resolver] yt ✓ "${match.title}" by ${match.author?.name ?? '?'}`);
-        return match.videoId;
+      for (const v of videos) {
+        const s = score(v);
+        if (s > bestScore) {
+          bestScore   = s;
+          bestVideoId = v.videoId;
+          if (s === 2) break; // perfect match — stop searching
+        }
       }
+      if (bestScore === 2) break;
     } catch { /* try next query */ }
   }
 
-  if (firstFallback) console.warn(`[Resolver] yt no artist match for "${artist} — ${title}", using top result`);
-  return firstFallback;
+  if (bestVideoId) {
+    const label = bestScore === 2 ? 'artist+title match' : bestScore === 1 ? 'artist match only' : 'title match only';
+    console.log(`[Resolver] yt "${title}" by "${artist}" → ${bestVideoId} (${label})`);
+  } else {
+    console.warn(`[Resolver] yt no match for "${artist} — ${title}"`);
+  }
+  return bestVideoId;
 }

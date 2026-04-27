@@ -81,25 +81,6 @@ export async function handleInput(input, triggerType = 'user-chat') {
   if (djResponse.pluginCall?.plugin && djResponse.pluginCall?.endpoint) {
     const { plugin: pluginName, endpoint, params = {} } = djResponse.pluginCall;
     activePluginName = pluginName;
-
-    // Immediately broadcast the pass-1 "hold on" message so the user sees feedback right away.
-    // Pass-2 result will arrive as a second dj-response once the plugin data is ready.
-    if (djResponse.say) {
-      broadcast('dj-response', {
-        agent: agentName,
-        say: djResponse.say,
-        ttsUrl: null,
-        play: [],
-        firstTrack: null,
-        reason: djResponse.reason ?? '',
-        segue: '',
-        playIntent: 'end',
-        trigger: triggerType,
-        interim: true,
-      });
-      console.log(`[Router:${triggerType}] ${ts()} interim pass-1 broadcast: "${djResponse.say.slice(0, 80)}"`);
-    }
-
     try {
       console.log(`[Router:${triggerType}] ${ts()} plugin call → ${pluginName}/${endpoint} params=${JSON.stringify(params)}`);
       let pluginData = await callPlugin(pluginName, endpoint, params);

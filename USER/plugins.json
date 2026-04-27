@@ -389,6 +389,7 @@
         ]
       }
     },
-    "enabled": true
+    "enabled": true,
+    "djEndpoints": ["podcast_daily", "podcast_force_daily", "library_recommendations", "library_trending", "news_search"]
   }
 ]

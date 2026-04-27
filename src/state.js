@@ -271,13 +271,27 @@ export function getTodaySuggestions() {
   `).all();
 }
 
-// Suggestions from before today — softer cross-session context
-export function getCrossSessionSuggestions(limit = 25) {
+// Suggestions from the last N days (excluding today) — treat as firm block to prevent near-term repeats
+export function getRecentCrossSessionSuggestions(days = 7, limit = 300) {
   return db.prepare(`
     SELECT title, artist FROM (
       SELECT title, artist, MAX(suggested_at) AS last
       FROM suggestions
       WHERE date(suggested_at, 'unixepoch', 'localtime') < date('now', 'localtime')
+        AND date(suggested_at, 'unixepoch', 'localtime') >= date('now', 'localtime', ? || ' days')
+      GROUP BY lower(title), lower(artist)
+      ORDER BY last DESC
+    ) LIMIT ?
+  `).all(`-${days}`, limit);
+}
+
+// Suggestions older than N days — softer signal, just for style awareness
+export function getCrossSessionSuggestions(limit = 75) {
+  return db.prepare(`
+    SELECT title, artist FROM (
+      SELECT title, artist, MAX(suggested_at) AS last
+      FROM suggestions
+      WHERE date(suggested_at, 'unixepoch', 'localtime') < date('now', 'localtime', '-7 days')
       GROUP BY lower(title), lower(artist)
       ORDER BY last DESC
     ) LIMIT ?

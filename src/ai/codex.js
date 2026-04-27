@@ -8,6 +8,29 @@
 
 const CODEX_MODEL = process.env.CODEX_MODEL ?? 'gpt-4o-mini';
 
+const JSON_INSTRUCTION = `
+Respond ONLY with a single JSON object (no markdown, no extra text) with these fields:
+{
+  "say": "<string — what you say aloud, never empty>",
+  "play": [{"title":"<string>","artist":"<string>","source":"<spotify|apple|youtube|any>"}],
+  "reason": "<string>",
+  "segue": "<string>",
+  "pluginCall": {"plugin":"<name>","endpoint":"<name>","params":{}} | null,
+  "pluginAction": {
+    "type": "play | rest-piece | info",
+    "title": "<string>",
+    "audioUrl": "<copy exactly from plugin result — file://, /abs/path, or https:// — for type=play>",
+    "imageUrl": "<copy exactly from plugin result — for type=play artwork or type=rest-piece>",
+    "text": "<description or summary — for type=rest-piece>",
+    "sourceUrl": "<original URL — optional>"
+  } | null
+}
+pluginAction type rules:
+- "play"       → plugin returned audio (audio_url / audioUrl / url). Set audioUrl. Set imageUrl if there is an image.
+- "rest-piece" → plugin returned an image + text/article but NO audio. Set imageUrl and text.
+- "info"       → plugin returned only text. Summarize in say. Do not set pluginAction, or set type=info.
+Always populate say with a spoken intro or summary.`;
+
 // Returns: { say, play: [{title, artist, source}], reason, segue }
 export async function generate(systemPrompt, userMessage) {
   const key = process.env.OPENAI_API_KEY;
@@ -23,10 +46,10 @@ export async function generate(systemPrompt, userMessage) {
       model: CODEX_MODEL,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: systemPrompt + '\n' + JSON_INSTRUCTION },
         { role: 'user',   content: userMessage },
       ],
-      max_tokens: 800,
+      max_tokens: 1500,
       temperature: 1.1,
     }),
   });
@@ -37,7 +60,10 @@ export async function generate(systemPrompt, userMessage) {
   }
 
   const data = await res.json();
-  const text = data.choices?.[0]?.message?.content ?? '';
+  const choice = data.choices?.[0];
+  const text = choice?.message?.content ?? '';
+  console.log(`[Codex] finish_reason=${choice?.finish_reason} tokens=${JSON.stringify(data.usage)}`);
+  console.log(`[Codex] raw response (first 400): ${text.slice(0, 400)}`);
   return parseOutput(text);
 }
 

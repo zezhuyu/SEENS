@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getSessionMessages, getRecentPlays, peekNext, getQueueTracks, getPref, getSessionSuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback, getSessionContext } from './state.js';
+import { getSessionMessages, getRecentPlays, peekNext, getQueueTracks, getPref, getSessionSuggestions, getRecentCrossSessionSuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback, getSessionContext } from './state.js';
 import { getWeatherContext } from './weather.js';
 import { getLocation } from './location.js';
 import { readUserFile, readUserJSON } from './paths.js';
@@ -104,27 +104,29 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     messages.length ? `This session's conversation (mood instructions set here carry through the whole session):\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n') || '(No listening history yet)';
 
-  // Fragment 5b — Suggestion history: queued (hard block) + session (hard block) + cross-session (soft)
-  const queuedTracks            = getQueueTracks();
-  const sessionSuggestions      = getSessionSuggestions();
-  const crossSessionSuggestions = getCrossSessionSuggestions(25);
+  // Fragment 5b — Suggestion history: queued + session + recent cross-session (hard block) + older cross-session (soft)
+  const queuedTracks                 = getQueueTracks();
+  const sessionSuggestions           = getSessionSuggestions();
+  const recentCrossSessionSuggestions = getRecentCrossSessionSuggestions(7, 300); // last 7 days
+  const olderCrossSessionSuggestions  = getCrossSessionSuggestions(75);           // older than 7 days
 
-  // Merge queued + session suggestions into one hard-block list so the AI sees a single
-  // authoritative "never suggest" list rather than two separate blocks it might miss.
+  // Merge queued + session + last-7-days into one hard-block list.
   const hardBlockTracks = new Map();
-  for (const t of queuedTracks) hardBlockTracks.set(`${t.title.toLowerCase()}|||${(t.artist ?? '').toLowerCase()}`, t);
-  for (const t of sessionSuggestions) hardBlockTracks.set(`${t.title.toLowerCase()}|||${(t.artist ?? '').toLowerCase()}`, t);
+  const key = t => `${t.title.toLowerCase()}|||${(t.artist ?? '').toLowerCase()}`;
+  for (const t of queuedTracks)                  hardBlockTracks.set(key(t), t);
+  for (const t of sessionSuggestions)            hardBlockTracks.set(key(t), t);
+  for (const t of recentCrossSessionSuggestions) hardBlockTracks.set(key(t), t);
   const hardBlockList = [...hardBlockTracks.values()];
 
   const suggestionHistory = [
     hardBlockList.length
-      ? `⛔ ABSOLUTE HARD BLOCK — ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} you MUST NOT suggest under any circumstances this session (already queued or already suggested):\n${
+      ? `⛔ ABSOLUTE HARD BLOCK — ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} you MUST NOT suggest (already played or suggested in the last 7 days):\n${
           hardBlockList.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
         }\nEven if a title or artist appears in your Library or Discoveries sections, skip it if it's listed here.`
       : '',
-    crossSessionSuggestions.length
-      ? `Tracks suggested in recent past sessions — strongly avoid repeating unless user explicitly requests:\n${
-          crossSessionSuggestions.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
+    olderCrossSessionSuggestions.length
+      ? `Tracks suggested more than a week ago — avoid repeating unless user explicitly requests:\n${
+          olderCrossSessionSuggestions.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
         }`
       : '',
   ].filter(Boolean).join('\n\n');
@@ -195,9 +197,9 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     pluginCtx    ? '## Plugins\n' + pluginCtx : '',
     // Repeat the hard block at the END of the prompt — LLMs pay highest attention
     // to the beginning and end. This double-anchoring prevents session repeats.
-    suggestionHistory ? '## ⛔ Final Reminder — Do Not Repeat\n' + (hardBlockList.length
-      ? `You MUST NOT suggest any of these ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} — they are already in this session:\n${hardBlockList.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')}`
-      : '') : '',
+    hardBlockList.length
+      ? `## ⛔ Final Reminder — Do Not Repeat\nYou MUST NOT suggest any of these ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} — already played or suggested in the last 7 days:\n${hardBlockList.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')}`
+      : '',
   ].filter(Boolean).join('\n\n---\n\n');
 }
 

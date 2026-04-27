@@ -292,7 +292,8 @@ export function pluginSystemContext() {
   if (!enabled.length) return null;
 
   const lines = [
-    'You have access to external plugins. When the user asks for content a plugin can provide (e.g. play a podcast, fetch an episode), set "pluginCall" in your response and leave "play" empty.',
+    'You have access to external plugins.',
+    'IMPORTANT: When the user asks for news, headlines, briefings, podcasts, episodes, or ANYTHING a plugin can fetch — you MUST set "pluginCall" and leave "play" empty. Do NOT answer from memory. Do NOT make up content or URLs.',
     'You will receive the plugin result in the next turn and should then set "pluginAction" to decide what to do with it.',
     '',
     'Available plugins:',
@@ -302,23 +303,26 @@ export function pluginSystemContext() {
     lines.push(`\n### ${p.name}`);
     lines.push(p.description);
     lines.push('Endpoints:');
+    // If djEndpoints is set, only expose those endpoints to the DJ to keep the prompt concise
+    const allowedNames = p.djEndpoints?.length ? new Set(p.djEndpoints) : null;
     for (const [name, ep] of Object.entries(p.endpoints ?? {})) {
+      if (allowedNames && !allowedNames.has(name)) continue;
       const paramList = (ep.params ?? []).map(pr => `${pr.name}: ${pr.description}`).join(', ');
       lines.push(`  - ${name}(${paramList}): ${ep.description}`);
     }
   }
 
   lines.push('');
-  lines.push('pluginAction.type options:');
-  lines.push('  - "play"       → stream audioUrl in the music player (use when plugin returns audio_url, audioUrl, or url pointing to audio)');
-  lines.push('  - "rest-piece" → save imageUrl + text as an art recommendation for the next break');
-  lines.push('  - "info"       → include the data in your "say" response (use for text/articles/news)');
+  lines.push('pluginAction type — choose based on what the plugin returned:');
+  lines.push('  "play"       → plugin has audio (audio_url/audioUrl/url). Set audioUrl (copy verbatim). Set imageUrl if there is an image. Set play=[].');
+  lines.push('  "rest-piece" → plugin has an image + article/text but NO audio. Set imageUrl and text.');
+  lines.push('  "info"       → plugin returned only text/data. Summarize in say. No pluginAction needed.');
   lines.push('');
-  lines.push('Audio playback rules:');
-  lines.push('  - If the plugin result has an audio_url, audioUrl, or url field ending in .mp3/.m4a/.aac/.wav → set type="play", audioUrl=<that value>');
-  lines.push('  - If the plugin result has a "content" or "summary" text field → set type="info" and include highlights in say');
-  lines.push('  - When playing plugin audio, set play=[] (do not suggest music tracks in the same response)');
-  lines.push('  - The title field in pluginAction will be shown in the player UI — use the episode/briefing title');
+  lines.push('Field copy rules — always copy values exactly from the plugin result, never rewrite or shorten:');
+  lines.push('  audio_url / audioUrl / url  → pluginAction.audioUrl  (accepts file://, /absolute/path, or https://)');
+  lines.push('  image_url / imageUrl / image → pluginAction.imageUrl (may be a relative path — copy as-is, server resolves it)');
+  lines.push('  title                        → pluginAction.title');
+  lines.push('Always write a non-empty say — spoken intro for play, spoken summary for rest-piece or info.');
 
   return lines.join('\n');
 }

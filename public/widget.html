@@ -2977,10 +2977,13 @@ function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
   const [accent,          setAccent]          = useState('#33c173');
-  const [volume,          setVolume]          = useState(80);
+  const [volume,          setVolume]          = useState(() => parseInt(localStorage.getItem('seens-volume') ?? '80') || 80);
   const [restIntervalMin, setRestIntervalMin] = useState(45);
   const [restDurationMin, setRestDurationMin] = useState(5);
   const [categoryFilter,  setCategoryFilter]  = useState('All');
+
+  // Persist volume to localStorage whenever it changes
+  useEffect(() => { localStorage.setItem('seens-volume', String(volume)); }, [volume]);
 
   // Restore persisted timer lengths on mount
   useEffect(() => {
