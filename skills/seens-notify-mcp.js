@@ -66,7 +66,7 @@ async function detectPort() {
   for (const port of candidates) {
     if (await portLive(Number(port))) return Number(port);
   }
-  return 8080;
+  return 7477;
 }
 
 function portLive(port) {

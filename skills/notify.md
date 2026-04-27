@@ -22,7 +22,7 @@ The tool auto-detects the SEENS port, POSTs to `/api/notify`, and confirms deliv
 
 ```bash
 PORT=$(lsof -iTCP -sTCP:LISTEN -P 2>/dev/null | awk '/node|electron/{print $9}' | grep -oE '[0-9]+$' | head -1)
-curl -s -X POST "http://localhost:${PORT:-8080}/api/notify" \
+curl -s -X POST "http://localhost:${PORT:-7477}/api/notify" \
   -H "Content-Type: application/json" \
   -d '{"title":"…","message":"…","type":"info"}'
 ```
