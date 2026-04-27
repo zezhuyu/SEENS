@@ -147,7 +147,7 @@ Spotify is used for track metadata, artwork, and canonical song names. Music sti
 
 1. Go to **developer.spotify.com/dashboard** and log in.
 2. Click **Create app**.
-3. Set **Redirect URI** to `http://localhost:7477/callback/spotify` (must match `PORT`).
+3. Set **Redirect URI** to `http://127.0.0.1:7477/callback/spotify` (must match `PORT`).
 4. Copy the **Client ID** (no secret needed — uses PKCE).
 
 ```env
