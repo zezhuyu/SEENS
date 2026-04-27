@@ -217,6 +217,15 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
       setInterval(pruneCache, 24 * 60 * 60 * 1000);
     });
 
+    // Hot-reload .env — re-read when the file is manually edited so keys take
+    // effect immediately without a server restart.
+    try {
+      fs.watch(path.join(__dirname, '.env'), () => {
+        const r = dotenvConfig({ path: path.join(__dirname, '.env'), override: true });
+        if (!r.error) console.log('[Server] .env reloaded');
+      });
+    } catch { /* file may not exist yet */ }
+
     // Hot-reload plugins.json — broadcast to all connected clients when the file
     // changes so the Settings panel refreshes without a restart or manual reload.
     import('./src/paths.js').then(({ userPath }) => {

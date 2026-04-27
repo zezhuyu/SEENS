@@ -1,24 +1,394 @@
 [
   {
     "name": "briefcast",
-    "description": "Personal podcast app. Fetches your daily briefing episodes. Each episode has audio, cover art, title, and a summary. Use when the user asks to play a podcast, briefing, or news episode.",
-    "enabled": false,
-    "baseUrl": "http://localhost:3001",
+    "description": "Personal AI podcast app. Use when the user asks to play, find, or generate a podcast or briefing episode; wants to browse their podcast library, history, or downloads; wants to manage playlists; or asks what news is trending. This plugin streams audio through the BriefCast desktop app running locally.",
+    "version": "1.0.0",
+    "baseUrl": "http://127.0.0.1:5002",
     "endpoints": {
-      "latest": {
-        "path": "/api/episodes/latest",
+      "health": {
+        "path": "/health",
         "method": "GET",
-        "description": "Returns the most recent episode. Response shape: { title, audioUrl, imageUrl, description, duration, pubDate }",
+        "description": "Health check. Returns { ok: true, service: 'briefcast-desktop-ts' } when the local BriefCast app is running and reachable.",
         "params": []
       },
-      "search": {
-        "path": "/api/episodes/search",
+      "status": {
+        "path": "/api/status",
         "method": "GET",
-        "description": "Search episodes by topic or keyword. Response shape: [{ title, audioUrl, imageUrl, description, duration }]",
+        "description": "Returns API status and provider availability info. Response: { ok: boolean, providerStatus: object }",
+        "params": []
+      },
+      "settings_get": {
+        "path": "/api/settings",
+        "method": "GET",
+        "description": "Get current app settings (AI providers, news sources, TTS voice, user preferences). Response: AppSettings object.",
+        "params": []
+      },
+      "settings_save": {
+        "path": "/api/settings",
+        "method": "POST",
+        "description": "Save app settings. Body should be a full or partial AppSettings object (providers, sources, preferences, tts). Response: updated AppSettings.",
         "params": [
-          { "name": "q", "in": "query", "description": "search query or topic" }
+          {
+            "name": "settings",
+            "in": "body",
+            "description": "AppSettings object with fields: providers, sources, preferences, tts"
+          }
+        ]
+      },
+      "news_sync": {
+        "path": "/api/news/sync",
+        "method": "POST",
+        "description": "Fetch and index the latest news articles from all configured sources. Response: { fetched: number, inserted: number, updated: number, skipped: number }",
+        "params": []
+      },
+      "news_search": {
+        "path": "/api/news/search",
+        "method": "GET",
+        "description": "Search news articles by keyword, semantic similarity, or hybrid mode. Response: array of SearchResult objects each with title, url, summary, sourceName, publishedAt, imageUrl, keywordScore, semanticScore, hybridScore.",
+        "params": [
+          {
+            "name": "query",
+            "in": "query",
+            "description": "Search term or topic"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "Search mode: 'keyword', 'semantic', or 'hybrid' (default: hybrid)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max results to return (default: 30)"
+          }
+        ]
+      },
+      "news_preference_search": {
+        "path": "/api/news/preference-search",
+        "method": "POST",
+        "description": "Search articles matching a natural-language topic description derived from user preferences. Response: array of SearchResult objects.",
+        "params": [
+          {
+            "name": "description",
+            "in": "body",
+            "description": "Natural language topic description (e.g. 'AI and machine learning breakthroughs')"
+          },
+          {
+            "name": "limit",
+            "in": "body",
+            "description": "Max results (optional)"
+          }
+        ]
+      },
+      "news_financial": {
+        "path": "/api/news/financial",
+        "method": "GET",
+        "description": "Get the latest financial news articles. Response: array of SearchResult objects.",
+        "params": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max results (default: 30)"
+          }
+        ]
+      },
+      "briefings_generate": {
+        "path": "/api/briefings/generate",
+        "method": "POST",
+        "description": "Generate a new daily text briefing from today's top articles. Response: { briefing: Briefing, articlesUsed: SearchResult[] }. Briefing has id, date, content, createdAt.",
+        "params": []
+      },
+      "briefings_list": {
+        "path": "/api/briefings",
+        "method": "GET",
+        "description": "List past daily text briefings in reverse chronological order. Response: array of Briefing objects { id, date, content, createdAt }.",
+        "params": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max briefings to return (default: 10)"
+          }
+        ]
+      },
+      "library_recommendations": {
+        "path": "/api/library/recommendations",
+        "method": "GET",
+        "description": "Get recommended podcast episodes for the user based on their preferences and history. Response: array of RecommendationPodcast { id, title, subcategory, sourceName, sourceType, summary, url, publishedAt, estimatedDurationSeconds, imageResource }.",
+        "params": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max recommendations (default: 100)"
+          }
+        ]
+      },
+      "library_trending": {
+        "path": "/api/library/trending",
+        "method": "GET",
+        "description": "Get currently trending podcast episodes. Response: array of RecommendationPodcast objects.",
+        "params": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max results (default: 20)"
+          }
+        ]
+      },
+      "history_list": {
+        "path": "/api/history",
+        "method": "GET",
+        "description": "Get the user's podcast listen history in reverse chronological order. Response: array of ListenHistoryItem { recommendationId, title, sourceName, listenedAt, progressSeconds, durationSeconds }.",
+        "params": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max history items (default: 200)"
+          }
+        ]
+      },
+      "history_track": {
+        "path": "/api/history/track",
+        "method": "POST",
+        "description": "Record that the user listened to a podcast episode. Response: the created ListenHistoryItem.",
+        "params": [
+          {
+            "name": "recommendationId",
+            "in": "body",
+            "description": "ID of the recommendation/episode that was listened to"
+          },
+          {
+            "name": "progressSeconds",
+            "in": "body",
+            "description": "Playback position in seconds (optional)"
+          },
+          {
+            "name": "durationSeconds",
+            "in": "body",
+            "description": "Total duration in seconds (optional)"
+          }
+        ]
+      },
+      "podcast_daily": {
+        "path": "/api/podcast/daily",
+        "method": "GET",
+        "description": "Get today's pre-generated daily podcast episode. Returns null if not yet generated. Response: Podcast { id, title, subcategory, source_name, image_url, audio_url, transcript_url, duration_seconds, published_at, is_daily }.",
+        "params": []
+      },
+      "podcast_force_daily": {
+        "path": "/api/podcast/force-daily",
+        "method": "POST",
+        "description": "Force regenerate today's daily podcast even if one already exists. Response: Podcast object or null.",
+        "params": []
+      },
+      "podcast_generate_audio": {
+        "path": "/api/podcast/generate-audio",
+        "method": "POST",
+        "description": "Generate a full audio podcast episode for a specific recommendation. This synthesizes speech and returns the Podcast record with audio_url. Response: Podcast object.",
+        "params": [
+          {
+            "name": "recommendationId",
+            "in": "body",
+            "description": "ID of the recommendation to generate audio for"
+          }
+        ]
+      },
+      "podcast_generate_summary": {
+        "path": "/api/podcast/generate-summary",
+        "method": "POST",
+        "description": "Generate a summary podcast that wraps multiple individual podcast episodes into one. Response: Podcast object with is_summary: true.",
+        "params": [
+          {
+            "name": "podcastIds",
+            "in": "body",
+            "description": "Array of podcast IDs to summarize"
+          }
+        ]
+      },
+      "podcast_get": {
+        "path": "/api/podcast/{podcastId}",
+        "method": "GET",
+        "description": "Get a specific podcast by its ID. Response: Podcast object or null.",
+        "params": [
+          {
+            "name": "podcastId",
+            "in": "query",
+            "description": "Podcast ID (used as URL path segment)"
+          }
+        ]
+      },
+      "podcast_rate": {
+        "path": "/api/podcast/{podcastId}/rate",
+        "method": "POST",
+        "description": "Rate a podcast episode. Rating is a number (e.g. 1–5). Response: updated result object.",
+        "params": [
+          {
+            "name": "podcastId",
+            "in": "query",
+            "description": "Podcast ID (URL path segment)"
+          },
+          {
+            "name": "rating",
+            "in": "body",
+            "description": "Numeric rating value"
+          }
+        ]
+      },
+      "episode_generate": {
+        "path": "/api/episode/generate",
+        "method": "POST",
+        "description": "Generate a podcast episode (transcript + LRC lyrics + audio) for a recommendation. Returns base64-encoded audio. Response: { transcript: string, lyricsLrc: string, audioBase64: string }.",
+        "params": [
+          {
+            "name": "recommendationId",
+            "in": "body",
+            "description": "ID of the recommendation to generate a full episode for"
+          }
+        ]
+      },
+      "downloads_list": {
+        "path": "/api/downloads",
+        "method": "GET",
+        "description": "List all downloaded (saved offline) podcast episodes. Response: array of DownloadPodcastItem { id, recommendationId, title, imageResource, audioResource, lyricsResource, savedAt }.",
+        "params": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max results (default: 500)"
+          }
+        ]
+      },
+      "downloads_save": {
+        "path": "/api/downloads",
+        "method": "POST",
+        "description": "Save a podcast episode to the local downloads library. Response: DownloadPodcastItem.",
+        "params": [
+          {
+            "name": "recommendationId",
+            "in": "body",
+            "description": "ID of the recommendation to save"
+          },
+          {
+            "name": "imageResource",
+            "in": "body",
+            "description": "Image resource filename (optional)"
+          },
+          {
+            "name": "audioResource",
+            "in": "body",
+            "description": "Audio resource filename (optional)"
+          },
+          {
+            "name": "lyricsResource",
+            "in": "body",
+            "description": "Lyrics/transcript resource filename (optional)"
+          }
+        ]
+      },
+      "downloads_remove": {
+        "path": "/api/downloads",
+        "method": "DELETE",
+        "description": "Remove a downloaded episode from the local library. Response: { ok: true }.",
+        "params": [
+          {
+            "name": "id",
+            "in": "query",
+            "description": "Download record ID to remove"
+          }
+        ]
+      },
+      "playlists_list": {
+        "path": "/api/playlists",
+        "method": "GET",
+        "description": "List all user playlists. Response: array of PlaylistInfo { id, name, description, createdAt, items[] }.",
+        "params": []
+      },
+      "playlists_create": {
+        "path": "/api/playlists",
+        "method": "POST",
+        "description": "Create a new playlist. Response: the created PlaylistInfo.",
+        "params": [
+          {
+            "name": "name",
+            "in": "body",
+            "description": "Playlist name"
+          },
+          {
+            "name": "description",
+            "in": "body",
+            "description": "Optional playlist description"
+          }
+        ]
+      },
+      "playlists_delete": {
+        "path": "/api/playlists/{playlistId}",
+        "method": "DELETE",
+        "description": "Delete a playlist by ID. Response: { ok: true }.",
+        "params": [
+          {
+            "name": "playlistId",
+            "in": "query",
+            "description": "Playlist ID (URL path segment)"
+          }
+        ]
+      },
+      "playlists_add": {
+        "path": "/api/playlists/{playlistId}/add",
+        "method": "POST",
+        "description": "Add a podcast episode to a playlist. Response: { ok: true }.",
+        "params": [
+          {
+            "name": "playlistId",
+            "in": "query",
+            "description": "Playlist ID (URL path segment)"
+          },
+          {
+            "name": "podcastId",
+            "in": "body",
+            "description": "Podcast ID to add"
+          }
+        ]
+      },
+      "playlists_remove": {
+        "path": "/api/playlists/{playlistId}/remove",
+        "method": "POST",
+        "description": "Remove a podcast episode from a playlist. Response: { ok: true }.",
+        "params": [
+          {
+            "name": "playlistId",
+            "in": "query",
+            "description": "Playlist ID (URL path segment)"
+          },
+          {
+            "name": "podcastId",
+            "in": "body",
+            "description": "Podcast ID to remove"
+          }
+        ]
+      },
+      "media_manifest": {
+        "path": "/api/media/manifest",
+        "method": "GET",
+        "description": "List all bundled media resources available on the local device. Response: MediaManifest { resourceDir, images[], audio[], lyrics[], defaults }.",
+        "params": []
+      },
+      "media_resource": {
+        "path": "/api/media/resource",
+        "method": "GET",
+        "description": "Read a bundled media resource by filename. Response: MediaResourcePayload { name, mimeType, data } where data is base64-encoded by default.",
+        "params": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Resource filename (e.g. 'daily.png')"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Return format: 'base64' (default) or 'text'"
+          }
         ]
       }
-    }
+    },
+    "enabled": true
   }
 ]

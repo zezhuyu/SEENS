@@ -10,6 +10,7 @@
     "setup": "node scripts/setup.js",
     "sync": "node scripts/sync-music.js",
     "install-agent": "node scripts/install-agent.js",
+    "install-skill": "node scripts/install-skill-global.js",
     "electron": "electron electron/main.cjs",
     "electron:dev": "NODE_ENV=development electron electron/main.cjs",
     "dist": "SKIP_MAC_NOTARIZE=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64 --dir -c.mac.forceCodeSigning=false -c.mac.identity=null && node scripts/post-sign-macos-local.cjs"

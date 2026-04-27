@@ -1,7 +1,7 @@
 import { generate, getActiveAgent } from './ai/index.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
-import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setSessionContext } from './state.js';
+import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setSessionContext, setSessionStart } from './state.js';
 import { broadcast } from './ws-broadcast.js';
 import { resolveTracksOrdered } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
@@ -27,6 +27,13 @@ export async function handleInput(input, triggerType = 'user-chat') {
 
   const t0 = Date.now();
   const ts = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
+
+  // Ensure a session epoch exists so session-level suggestion dedup always works.
+  // Without this, getSessionSuggestions() falls back to today's suggestions only.
+  if (!parseInt(getPref('session.started_at', '0'))) {
+    setSessionStart();
+    console.log(`[Router] Auto-started new session`);
+  }
 
   // AI-powered response
   addMessage('user', trimmed);

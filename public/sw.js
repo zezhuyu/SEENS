@@ -1,4 +1,4 @@
-const CACHE = 'seens-radio-v1';
+const CACHE = 'seens-radio-v3';
 const STATIC = ['/', '/app.js', '/styles/main.css', '/styles/player.css',
   '/components/radio-player.js', '/components/radio-profile.js', '/components/radio-settings.js',
   '/manifest.json'];

@@ -108,19 +108,22 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
   const queuedTracks            = getQueueTracks();
   const sessionSuggestions      = getSessionSuggestions();
   const crossSessionSuggestions = getCrossSessionSuggestions(25);
+
+  // Merge queued + session suggestions into one hard-block list so the AI sees a single
+  // authoritative "never suggest" list rather than two separate blocks it might miss.
+  const hardBlockTracks = new Map();
+  for (const t of queuedTracks) hardBlockTracks.set(`${t.title.toLowerCase()}|||${(t.artist ?? '').toLowerCase()}`, t);
+  for (const t of sessionSuggestions) hardBlockTracks.set(`${t.title.toLowerCase()}|||${(t.artist ?? '').toLowerCase()}`, t);
+  const hardBlockList = [...hardBlockTracks.values()];
+
   const suggestionHistory = [
-    queuedTracks.length
-      ? `Tracks CURRENTLY IN THE QUEUE and about to play — NEVER suggest these, they are already planned:\n${
-          queuedTracks.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
-        }`
-      : '',
-    sessionSuggestions.length
-      ? `Tracks already suggested THIS SESSION — NEVER suggest any of these again, no exceptions:\n${
-          sessionSuggestions.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
-        }`
+    hardBlockList.length
+      ? `⛔ ABSOLUTE HARD BLOCK — ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} you MUST NOT suggest under any circumstances this session (already queued or already suggested):\n${
+          hardBlockList.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
+        }\nEven if a title or artist appears in your Library or Discoveries sections, skip it if it's listed here.`
       : '',
     crossSessionSuggestions.length
-      ? `Tracks suggested in recent past sessions — avoid repeating unless specifically requested:\n${
+      ? `Tracks suggested in recent past sessions — strongly avoid repeating unless user explicitly requests:\n${
           crossSessionSuggestions.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
         }`
       : '',
@@ -182,12 +185,19 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     nowPlayingCtx ? '## Now Playing\n' + nowPlayingCtx : '',
     upNextCtx ? '## Up Next\n' + upNextCtx : '',
     '## Session History\n' + memory,
+    // Suggestion history placed immediately after session history so the AI sees
+    // the hard-block list right before it writes its response — highest attention window.
     suggestionHistory ? '## Suggestion History\n' + suggestionHistory : '',
     feedbackSummary   ? '## User Feedback\n'       + feedbackSummary   : '',
     '## Agent Info\n' + agentInfo,
     '## Mood State\n' + moodState,
     customPrompt ? '## Custom Instructions from User\n' + customPrompt : '',
     pluginCtx    ? '## Plugins\n' + pluginCtx : '',
+    // Repeat the hard block at the END of the prompt — LLMs pay highest attention
+    // to the beginning and end. This double-anchoring prevents session repeats.
+    suggestionHistory ? '## ⛔ Final Reminder — Do Not Repeat\n' + (hardBlockList.length
+      ? `You MUST NOT suggest any of these ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} — they are already in this session:\n${hardBlockList.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')}`
+      : '') : '',
   ].filter(Boolean).join('\n\n---\n\n');
 }
 

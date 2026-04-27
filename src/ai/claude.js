@@ -83,12 +83,14 @@ function parseClaudeOutput(raw) {
 
 function normalize(obj) {
   return {
-    say:          String(obj.say ?? ''),
-    play:         Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
-    reason:       String(obj.reason ?? ''),
-    segue:        String(obj.segue ?? ''),
-    pluginCall:   obj.pluginCall?.plugin ? obj.pluginCall   : null,
-    pluginAction: obj.pluginAction?.type ? obj.pluginAction : null,
+    say:            String(obj.say ?? ''),
+    play:           Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
+    reason:         String(obj.reason ?? ''),
+    segue:          String(obj.segue ?? ''),
+    playIntent:     obj.playIntent     ?? null,
+    sessionContext: obj.sessionContext ?? null,
+    pluginCall:     obj.pluginCall?.plugin ? obj.pluginCall   : null,
+    pluginAction:   obj.pluginAction?.type ? obj.pluginAction : null,
   };
 }
 
