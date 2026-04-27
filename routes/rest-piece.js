@@ -1,10 +1,5 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, '..');
+import { readUserFile } from '../src/paths.js';
 
 const router = express.Router();
 
@@ -17,13 +12,14 @@ const CATEGORY_GRADIENTS = {
   Place:      { bg: 'linear-gradient(180deg,#0e1820 0%,#1a3040 45%,#3a6070 75%,#88b0c0 100%)', accent: '#88b0c0' },
   Building:   { bg: 'linear-gradient(190deg,#2a3035 0%,#4d5459 35%,#8a8478 70%,#c2b8a4 100%)', accent: '#c2b8a4' },
   Sculpture:  { bg: 'linear-gradient(160deg,#3a2a5a 0%,#6a5a8a 35%,#a090b0 65%,#d8d0e8 100%)', accent: '#d8d0e8' },
+  Food:       { bg: 'linear-gradient(165deg,#1a1208 0%,#3a2610 35%,#7a4e18 65%,#c8882a 100%)', accent: '#e8b84b' },
+  Story:      { bg: 'linear-gradient(155deg,#080e18 0%,#101e30 35%,#1a3248 65%,#234860 100%)', accent: '#4fc3f7' },
 };
 
 const ALL_CATS = Object.keys(CATEGORY_GRADIENTS);
 
 function readPrefs() {
-  try { return fs.readFileSync(path.join(ROOT, 'USER/rest-preferences.md'), 'utf8'); }
-  catch { return ''; }
+  return readUserFile('rest-preferences.md');
 }
 
 // Try multiple Wikipedia article titles until one returns an image
@@ -66,6 +62,70 @@ async function fetchWikiImageSearch(query) {
   return null;
 }
 
+// Hacker News Algolia API — no key required
+async function fetchHNStories(queries) {
+  const seen = new Set();
+  const stories = [];
+  for (const q of queries.slice(0, 4)) {
+    try {
+      const params = new URLSearchParams({
+        query: q, tags: 'story', hitsPerPage: '6', numericFilters: 'points>10',
+      });
+      const res = await fetch(`https://hn.algolia.com/api/v1/search?${params}`, {
+        headers: { 'User-Agent': 'SeensRadio/1.0' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const hit of (data.hits ?? [])) {
+        if (!hit.objectID || seen.has(hit.objectID)) continue;
+        seen.add(hit.objectID);
+        stories.push({
+          title:  hit.title ?? '',
+          url:    hit.url ?? `https://news.ycombinator.com/item?id=${hit.objectID}`,
+          author: hit.author ?? '',
+          points: hit.points ?? 0,
+          date:   hit.created_at?.slice(0, 10) ?? '',
+        });
+      }
+    } catch { /* network issues — skip this query */ }
+  }
+  return stories;
+}
+
+// Parse bullet-point topics from story-interests.md → search query strings
+function parseStoryTopics(md) {
+  if (!md?.trim()) return ['building with AI', 'Show HN', 'indie hacker'];
+  const topics = [];
+  for (const line of md.split('\n')) {
+    const m = line.match(/^[-*]\s+(.+)/);
+    if (m) {
+      const topic = m[1].split(/[:,]/)[0].trim();
+      if (topic.length > 2 && topic.length < 100) topics.push(topic);
+    }
+  }
+  return topics.length > 0 ? topics.slice(0, 5) : ['building with AI', 'Show HN', 'indie hacker'];
+}
+
+// NASA Image and Video Library — no API key required
+async function fetchNASAImage(query) {
+  if (!query?.trim()) return null;
+  try {
+    const params = new URLSearchParams({ q: query.trim(), media_type: 'image', page_size: '5' });
+    const res = await fetch(`https://images-api.nasa.gov/search?${params}`, {
+      headers: { 'User-Agent': 'SeensRadio/1.0' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const items = data.collection?.items ?? [];
+    for (const item of items) {
+      const preview = item.links?.find(l => l.rel === 'preview' && l.render === 'image');
+      if (preview?.href) return preview.href;
+    }
+  } catch {}
+  return null;
+}
+
 router.get('/', async (req, res) => {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return res.status(500).json({ error: 'OPENAI_API_KEY not set' });
@@ -79,7 +139,27 @@ router.get('/', async (req, res) => {
   const prefs = readPrefs();
   const prefsSection = prefs ? `\n\nUser preferences for rest pieces:\n${prefs}` : '';
 
+  // For Story category: fetch real HN stories as context
+  const isStory = validCat === 'Story' || (!validCat && false); // only when explicitly requested
+  let hnContext = '';
+  if (validCat === 'Story') {
+    const storyInterestsMd = readUserFile('story-interests.md');
+    const topics = parseStoryTopics(storyInterestsMd);
+    const stories = await fetchHNStories(topics);
+    if (stories.length > 0) {
+      hnContext = '\n\n<fetched_stories>\n' +
+        stories.slice(0, 15).map((s, i) =>
+          `${i + 1}. "${s.title}" by ${s.author} (${s.date}, ${s.points} pts)\n   URL: ${s.url}`
+        ).join('\n') +
+        '\n</fetched_stories>';
+    }
+  }
+
   try {
+    const userMessage = validCat === 'Story' && hnContext
+      ? `Here are recently fetched stories:\n${hnContext}\n\nPick the single most compelling one for my rest break.`
+      : 'Recommend one work for my rest break.';
+
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -93,24 +173,45 @@ router.get('/', async (req, res) => {
 
 Return JSON with exactly these fields:
 - cat: one of ${ALL_CATS.join(', ')}
-- title: work title
-- artist: creator's full name (director / architect / poet / photographer as appropriate)
-- year: year as a string
-- caption: 2-3 sentences describing the work vividly and specifically — no generic praise
+- title: work title (for Food: the dish name; for Photograph: the photograph's own title or common name)
+- artist: creator's full name — director / architect / poet / photographer / chef as appropriate; for Food use the chef, cook, or region/culture of origin
+- year: year or period as a string (for Food: approximate year the dish was codified or became famous)
+- source: (Photograph required; others optional) the collection, publication, or institution this work is from. For Photograph use the specific named source — one of: National Geographic, NASA / Hubble Space Telescope, NASA / Apollo Archive, NASA / Mars Exploration, NASA / James Webb Space Telescope, Magnum Photos, LIFE Magazine, TIME Magazine, Discovery Magazine, AP Photos, Smithsonian Magazine, National Portrait Gallery, or a specific famous photographer's archive (e.g. "Ansel Adams Archive", "Dorothea Lange / FSA", "Robert Capa / Magnum"). For Painting/Sculpture/Building use the museum if notable (e.g. "Louvre", "MoMA", "Tate Modern"). Omit for Music, Film, Poem, Food.
+- caption: 2-3 sentences describing the work vividly and specifically — no generic praise. For Photograph describe exactly what is in the frame: light, subject, composition, emotional charge. For Food describe flavours, textures, and appearance concretely.
 - fact: one surprising or little-known fact
-- story: 3-4 sentence human narrative — the circumstances of creation, a detail that reframes the work, or why it still matters
-- wikiTitle: the exact English Wikipedia article title for this specific work (e.g. "Afghan Girl (photograph)", "Blade Runner", "The Waste Land") — for the work itself, not the artist. This field is required and must be a real Wikipedia article.
-- searchQuery: (Music only) ideal YouTube Music search string — omit for non-music
+- story: 3-4 sentence human narrative. For Photograph tell the story behind the shot — where the photographer was, what was happening, why they pressed the shutter, and why this image endures. For Food tell the origin story: who invented it, why, what historical or cultural forces shaped it, and why it still matters.
+- url: (Story only, required) the exact URL of the story from the fetched data — copy it verbatim, do not invent URLs
+- wikiTitle: the exact English Wikipedia article title for this specific work (e.g. "Afghan Girl (photograph)", "Blade Runner", "The Waste Land", "Beef Wellington", "Pillars of Creation") — for the work itself, not the artist. Required for all categories except Story. Omit for Story.
+- searchQuery: (Music only) ideal YouTube Music search string — omit for all other categories
+
+Story category guidance:
+- cat must be "Story"
+- title: the story's headline from the fetched list
+- artist: the author's username or name from the fetched list
+- year: the publication year from the fetched list
+- source: "Hacker News" (or the original publication if the URL is not HN)
+- caption: 2-3 sentences on what this story is about and why it's worth reading — be specific about what the person built or discovered
+- story: 3-4 sentence narrative about the human behind it — their motivation, what surprised them, a concrete detail that makes it real
+- fact: one surprising thing about the project, the numbers, or the outcome
+
+Photograph source guidance — draw specifically from:
+- National Geographic iconic photographs (wildlife, human interest, documentary)
+- NASA archives: Hubble images, Apollo mission photos, Mars rover shots, James Webb deep-field images
+- Magnum Photos collective (Cartier-Bresson, Robert Capa, Sebastião Salgado, Steve McCurry, Elliott Erwitt, etc.)
+- LIFE Magazine and TIME Magazine archives (mid-20th century photojournalism)
+- Famous individual photographers: Ansel Adams, Dorothea Lange, Diane Arbus, Vivian Maier, Gordon Parks, Yousuf Karsh, Edward Weston, Man Ray, Irving Penn
+- Discovery / Smithsonian science photography
+- Famous people who were photographers: Churchill's war portraits, Einstein candids, etc.
 
 Guidelines:
-- Avoid the most famous/obvious examples (no Mona Lisa, Beethoven 9th, etc.)
-- Vary era, geography, gender of artist
-- Be specific — name movements, techniques, real details
+- Avoid the most famous/obvious examples (no Mona Lisa, Beethoven 9th, pizza Margherita, "Earthrise" every time, etc.)
+- Vary era, geography, gender of artist / culture of origin
+- Be specific — name movements, techniques, ingredients, real details
 - No emoji, no bullet points`,
           },
-          { role: 'user', content: 'Recommend one work for my rest break.' },
+          { role: 'user', content: userMessage },
         ],
-        max_tokens: 550,
+        max_tokens: validCat === 'Story' ? 700 : 550,
         temperature: 1.1,
       }),
     });
@@ -139,21 +240,44 @@ Guidelines:
       Sculpture:  ['(sculpture)'],
       Building:   [],
       Place:      [],
+      Food:       ['(dish)', '(food)', '(cuisine)'],
+      Story:      [],
     };
     const disambigs = (wikiDisambig[piece.cat] ?? []).map(s => `${piece.title} ${s}`);
 
-    let imageUrl = await fetchWikiImage([
-      piece.wikiTitle,              // AI-provided exact title (most reliable)
-      piece.title,                  // bare title
-      ...disambigs,                 // category-specific disambiguations
-      piece.artist,                 // artist's own Wikipedia page as portrait fallback
-    ]);
+    // Story pieces rely on the gradient background — no image lookup needed
+    let imageUrl = null;
 
-    // Broader fallback: Wikipedia full-text search — catches obscure/disambiguated articles
-    if (!imageUrl) imageUrl = await fetchWikiImageSearch(`${piece.title} ${piece.artist}`);
-    if (!imageUrl) imageUrl = await fetchWikiImageSearch(piece.title);
+    if (piece.cat !== 'Story') {
+      // For NASA-sourced photographs, try the NASA Image Library first — it has the
+      // actual archive assets at high quality and is free/public.
+      const isNASASource = piece.cat === 'Photograph' && /nasa/i.test(piece.source ?? '');
 
-    if (!imageUrl) console.warn(`[RestPiece] No image found for "${piece.title}"`);
+      if (isNASASource) {
+        imageUrl = await fetchNASAImage(piece.title);
+        if (!imageUrl) imageUrl = await fetchNASAImage(`${piece.title} ${piece.artist}`);
+      }
+
+      if (!imageUrl) {
+        imageUrl = await fetchWikiImage([
+          piece.wikiTitle,              // AI-provided exact title (most reliable)
+          piece.title,                  // bare title
+          ...disambigs,                 // category-specific disambiguations
+          piece.artist,                 // artist's own Wikipedia page as portrait fallback
+        ]);
+      }
+
+      // Broader fallback: Wikipedia full-text search — catches obscure/disambiguated articles
+      if (!imageUrl) imageUrl = await fetchWikiImageSearch(`${piece.title} ${piece.artist}`);
+      if (!imageUrl) imageUrl = await fetchWikiImageSearch(piece.title);
+
+      // Final NASA fallback for any photograph that still has no image
+      if (!imageUrl && piece.cat === 'Photograph') {
+        imageUrl = await fetchNASAImage(`${piece.title} ${piece.artist}`);
+      }
+
+      if (!imageUrl) console.warn(`[RestPiece] No image found for "${piece.title}"`);
+    }
 
     res.json({ ...piece, ...gradient, imageUrl });
   } catch (err) {

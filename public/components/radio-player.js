@@ -149,6 +149,16 @@ export class RadioPlayer {
       log('TTS ERR', `code=${this.ttsAudio.error?.code}`);
       this.ttsPlaying = false;
       this.audio.volume = parseInt(this.$('volume-slider').value) / 100;
+      // If TTS fails mid-cold-start, still play the queued track so music isn't silently lost
+      if (this._coldStartTrack) {
+        const track = this._coldStartTrack;
+        this._coldStartTrack = null;
+        fetch('/api/next', { method: 'POST' })
+          .then(r => r.json())
+          .then(({ upNext }) => this.updateUpNext(upNext))
+          .catch(() => {});
+        this.playTrack(track);
+      }
     });
   }
 

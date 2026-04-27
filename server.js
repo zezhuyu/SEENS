@@ -4,6 +4,7 @@ import expressWs from 'express-ws';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { ensureUserDir, seedUserDirFromBundle } from './src/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,7 +23,8 @@ const DATA_DIR    = process.env.SEENS_DATA_DIR ?? path.join(__dirname, 'data');
 const TTS_DIR     = process.env.SEENS_DATA_DIR ? path.join(process.env.SEENS_DATA_DIR, 'tts-cache') : path.join(__dirname, 'tts-cache');
 fs.mkdirSync(DATA_DIR,  { recursive: true });
 fs.mkdirSync(TTS_DIR,   { recursive: true });
-fs.mkdirSync(path.join(__dirname, 'USER'), { recursive: true });
+seedUserDirFromBundle();
+ensureUserDir();
 
 const app = express();
 expressWs(app);
@@ -55,6 +57,10 @@ const { default: restPieceRoute }    = await import('./routes/rest-piece.js');
 const { default: restNarrateRoute }  = await import('./routes/rest-narrate.js');
 const { default: upnpRoute }         = await import('./routes/upnp.js');
 const { default: airplayRoute }      = await import('./routes/airplay.js');
+const { default: feedbackRoute }     = await import('./routes/feedback.js');
+const { default: notifyRoute }       = await import('./routes/notify.js');
+const { default: pluginsRoute }          = await import('./routes/plugins.js');
+const { default: musicConnectorsRoute }  = await import('./routes/music-connectors.js');
 const streamHandler                  = (await import('./routes/stream.js')).default;
 
 app.use('/api/stream', streamAudioRoute);
@@ -70,6 +76,10 @@ app.use('/api/rest-piece', restPieceRoute);
 app.use('/api/rest-narrate', restNarrateRoute);
 app.use('/api/upnp', upnpRoute);
 app.use('/api/airplay', airplayRoute);
+app.use('/api/feedback', feedbackRoute);
+app.use('/api/notify', notifyRoute);
+app.use('/api/plugins', pluginsRoute);
+app.use('/api/music-connectors', musicConnectorsRoute);
 app.ws('/stream', streamHandler);
 
 // Apple Music user token endpoint (POSTed from MusicKit JS in the browser)
@@ -187,16 +197,52 @@ app.get('*', (req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '8080');
-app.listen(PORT, () => {
-  console.log(`\n🎙  Seens Radio running at http://localhost:${PORT}\n`);
+globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
+  const server = app.listen(PORT, '127.0.0.1', () => {
+    const address = server.address();
+    const actualPort = typeof address === 'object' && address ? address.port : PORT;
+    globalThis.SEENS_SERVER_PORT = actualPort;
+    process.env.PORT = String(actualPort);
+    console.log(`\n🎙  Seens Radio running at http://localhost:${actualPort}\n`);
 
-  // Start scheduler after server is up
-  import('./src/scheduler.js').then(({ startScheduler }) => startScheduler());
+    // Start scheduler after server is up
+    import('./src/scheduler.js').then(({ startScheduler }) => startScheduler());
 
-  // TTS cache pruning once a day
-  import('./src/tts.js').then(({ pruneCache }) => {
-    pruneCache();
-    setInterval(pruneCache, 24 * 60 * 60 * 1000);
+    // Background location auto-refresh (runs immediately, then every hour)
+    import('./src/location.js').then(({ startLocationRefresh }) => startLocationRefresh());
+
+    // TTS cache pruning once a day
+    import('./src/tts.js').then(({ pruneCache }) => {
+      pruneCache();
+      setInterval(pruneCache, 24 * 60 * 60 * 1000);
+    });
+
+    // Hot-reload plugins.json — broadcast to all connected clients when the file
+    // changes so the Settings panel refreshes without a restart or manual reload.
+    import('./src/paths.js').then(({ userPath }) => {
+      import('./src/ws-broadcast.js').then(({ broadcast }) => {
+        const pluginsFile = userPath('plugins.json');
+        let debounce = null;
+        try {
+          fs.watch(pluginsFile, () => {
+            clearTimeout(debounce);
+            debounce = setTimeout(() => {
+              console.log('[Server] plugins.json changed — notifying clients');
+              broadcast('plugins-changed', {});
+            }, 200);
+          });
+        } catch {
+          // File may not exist yet; watcher will be set up when first plugin is saved
+        }
+      });
+    });
+
+    resolve(actualPort);
+  });
+
+  server.on('error', (err) => {
+    console.error('[Server] listen failed:', err);
+    reject(err);
   });
 });
 

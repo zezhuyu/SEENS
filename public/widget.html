@@ -180,6 +180,12 @@ body {
 .track-artist { font-size:11.5px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .track-state { font-family:var(--font-mono); font-size:9px; letter-spacing:0.16em; text-transform:uppercase; color:var(--ink-3); margin-top:2px; }
 .transport { display:flex; align-items:center; gap:4px; }
+.track-feedback { display:flex; gap:1px; flex-shrink:0; }
+.fb-btn { appearance:none; border:none; background:transparent; padding:4px; cursor:pointer; color:var(--ink-3); border-radius:4px; opacity:0.55; transition:color .15s, opacity .15s; display:grid; place-items:center; }
+.fb-btn:hover { color:var(--ink); opacity:1; }
+.fb-btn.liked { color:#e8574a; opacity:1; }
+.fb-btn.disliked { color:var(--ink-2); opacity:1; }
+.widget.mini .track-feedback { display:none; }
 .tr-btn { appearance:none; border:0; background:transparent; width:28px; height:28px; border-radius:8px; color:var(--ink-2); display:grid; place-items:center; cursor:pointer; transition:background .15s,color .15s; }
 .tr-btn:hover { background:var(--surface-2); color:var(--ink); }
 .tr-btn.play { background:var(--ink); color:var(--surface); width:30px; height:30px; }
@@ -188,8 +194,11 @@ body {
 .progress i { display:block; height:100%; background:var(--ink); border-radius:999px; transition:width .3s linear; }
 .progress-times { display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:10px; color:var(--ink-3); letter-spacing:.05em; }
 .vol { display:flex; align-items:center; gap:6px; color:var(--ink-3); }
-.vol input[type=range] { appearance:none; -webkit-appearance:none; width:56px; height:3px; background:var(--surface-2); border-radius:999px; outline:none; }
+.vol input[type=range] { appearance:none; -webkit-appearance:none; flex:1; min-width:0; height:3px; background:var(--surface-2); border-radius:999px; outline:none; }
 .vol input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:10px; height:10px; border-radius:50%; background:var(--ink); cursor:pointer; }
+.vol-airplay-btn { appearance:none; border:none; background:transparent; padding:3px; cursor:pointer; color:var(--ink-3); display:grid; place-items:center; border-radius:4px; flex-shrink:0; opacity:0.65; transition:color .15s,opacity .15s; }
+.vol-airplay-btn:hover { color:var(--ink); opacity:1; }
+.vol-airplay-btn.active { color:var(--accent); opacity:1; }
 .tab-panel { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; border-bottom:0.5px solid var(--line-soft); }
 .tab-bar { display:flex; padding:8px 14px 0; gap:4px; align-items:center; flex-shrink:0; }
 .tab-btn { appearance:none; border:0; background:transparent; padding:8px 10px 9px; font-family:var(--font-mono); font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color:var(--ink-3); cursor:pointer; position:relative; display:flex; align-items:center; gap:6px; white-space:nowrap; transition:color .15s; }
@@ -216,6 +225,9 @@ body {
 .q-artist { font-size:10.5px; color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .q-dur { font-family:var(--font-mono); font-size:10px; color:var(--ink-3); }
 .chat { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
+.session-ctx-bar { padding:6px 14px; border-bottom:0.5px solid var(--line-soft); background:var(--surface-2); font-size:10.5px; color:var(--ink-2); display:flex; align-items:baseline; gap:6px; flex-shrink:0; }
+.session-ctx-bar .ctx-label { font-family:var(--font-mono); font-size:8.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); flex-shrink:0; }
+.session-ctx-bar .ctx-text { font-style:italic; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-scroll { flex:1 1 auto; min-height:0; overflow-y:auto; padding:10px 18px 10px; scrollbar-width:thin; scrollbar-color:var(--line) transparent; display:flex; flex-direction:column; gap:10px; }
 .chat-scroll::-webkit-scrollbar { width:6px; }
 .chat-scroll::-webkit-scrollbar-thumb { background:var(--line); border-radius:999px; }
@@ -255,16 +267,24 @@ body {
 @keyframes breathe { 0%,100%{transform:scale(1);opacity:.6} 50%{transform:scale(1.12);opacity:1} }
 .art-reveal { position:absolute; inset:0; background:var(--surface); opacity:0; pointer-events:none; transform:scale(1.02); transition:opacity .65s cubic-bezier(.3,.7,.3,1),transform .65s cubic-bezier(.3,.7,.3,1); display:flex; flex-direction:column; z-index:3; }
 .widget.rest-reveal .art-reveal { opacity:1; pointer-events:auto; transform:scale(1); }
+.widget.rest-return .art-reveal { opacity:0; pointer-events:none; transform:scale(1); }
+.return-to-work { position:absolute; inset:0; z-index:7; background:var(--surface); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px; opacity:0; pointer-events:none; transition:opacity .65s cubic-bezier(.3,.7,.3,1); }
+.widget.rest-return .return-to-work { opacity:1; pointer-events:auto; }
+.return-to-work .rtw-label { font-family:var(--font-mono); font-size:10px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-3); }
+.return-to-work .rtw-heading { font-size:26px; font-weight:400; letter-spacing:-0.02em; color:var(--ink); }
+.return-to-work .rtw-sub { font-family:var(--font-mono); font-size:11px; color:var(--ink-3); letter-spacing:0.06em; }
+.return-to-work .rtw-btn { appearance:none; border:1.5px solid var(--accent); background:var(--accent); color:#111; border-radius:10px; padding:11px 28px; font-size:13px; font-weight:600; letter-spacing:0.02em; cursor:pointer; transition:opacity .15s; }
+.return-to-work .rtw-btn:hover { opacity:0.82; }
 .widget .hero,.widget .player,.widget .tab-panel,.widget .footer,.widget .categories,.widget .dj-bar { transition:opacity .45s cubic-bezier(.3,.7,.3,1); }
 .widget.resting .hero,.widget.resting .player,.widget.resting .tab-panel,.widget.resting .footer,.widget.resting .categories,.widget.resting .dj-bar { opacity:0; }
-.art-tabs { display:flex; gap:0; padding:12px 18px 0; border-bottom:0.5px solid var(--line-soft); flex-shrink:0; }
+.art-tabs { display:flex; gap:0; padding:12px 18px 0; border-bottom:0.5px solid var(--line-soft); flex-shrink:0; }   
 .art-tab { appearance:none; background:transparent; border:0; padding:8px 0; margin-right:22px; color:var(--ink-3); font-family:var(--font-mono); font-size:10.5px; letter-spacing:0.14em; text-transform:uppercase; cursor:pointer; border-bottom:1.5px solid transparent; margin-bottom:-0.5px; transition:color .15s; }
 .art-tab:hover { color:var(--ink-2); }
 .art-tab.active { color:var(--ink); border-bottom-color:var(--accent); }
 .art-image { position:relative; aspect-ratio:4/3; overflow:hidden; flex-shrink:0; }
 .art-image::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(45deg,rgba(255,255,255,.0) 0,rgba(255,255,255,.0) 14px,rgba(255,255,255,.04) 14px,rgba(255,255,255,.04) 28px); pointer-events:none; }
 .art-image .placeholder-label { position:absolute; inset:auto 0 12px 0; text-align:center; font-family:var(--font-mono); font-size:9.5px; letter-spacing:0.18em; color:rgba(255,255,255,.7); text-transform:uppercase; }
-.art-image .cat-badge { position:absolute; top:14px; left:14px; font-family:var(--font-mono); font-size:9px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,.9); background:rgba(0,0,0,.3); backdrop-filter:blur(8px); padding:4px 9px; border-radius:999px; border:0.5px solid rgba(255,255,255,.2); }
+.art-image .cat-badge { position:absolute; top:14px; left:90px; font-family:var(--font-mono); font-size:9px; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,.9); background:rgba(0,0,0,.3); backdrop-filter:blur(8px); padding:4px 9px; border-radius:999px; border:0.5px solid rgba(255,255,255,.2); }
 .art-close { position:absolute; top:14px; right:14px; width:28px; height:28px; border-radius:50%; background:rgba(0,0,0,.35); backdrop-filter:blur(8px); border:0.5px solid rgba(255,255,255,.2); color:white; display:grid; place-items:center; cursor:pointer; appearance:none; }
 .art-close:hover { background:rgba(0,0,0,.55); }
 .art-body { flex:1; overflow-y:auto; padding:18px 22px 16px; scrollbar-width:thin; scrollbar-color:var(--line) transparent; display:flex; flex-direction:column; gap:12px; }
@@ -272,7 +292,8 @@ body {
 .art-body::-webkit-scrollbar-thumb { background:var(--line); border-radius:999px; }
 .art-rest-note { font-family:var(--font-mono); font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; color:var(--accent); display:flex; align-items:center; gap:6px; }
 .art-title { font-size:22px; font-weight:500; letter-spacing:-0.015em; color:var(--ink); line-height:1.15; text-wrap:balance; }
-.art-meta { font-size:12px; color:var(--ink-2); font-family:var(--font-mono); }
+.art-meta { font-size:12px; color:var(--ink-2); font-family:var(--font-mono); display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.art-source { display:inline-flex; align-items:center; gap:4px; background:var(--surface-2); border:0.5px solid var(--line); border-radius:999px; padding:2px 8px; font-size:9.5px; letter-spacing:0.06em; color:var(--ink-2); white-space:nowrap; }
 .art-caption { font-size:13px; line-height:1.55; color:var(--ink); text-wrap:pretty; }
 .art-fact { border-left:2px solid var(--accent); padding:6px 0 6px 12px; font-size:12px; line-height:1.55; color:var(--ink-2); }
 .art-fact::before { content:'Did you know'; display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:0.14em; text-transform:uppercase; color:var(--accent); margin-bottom:3px; }
@@ -306,6 +327,7 @@ body {
 .settings-row-sub { font-size:10.5px; color:var(--ink-3); margin-top:1px; }
 .settings-input { appearance:none; border:0.5px solid var(--line); background:var(--surface-2); border-radius:8px; padding:6px 10px; font-family:var(--font-sans); font-size:12px; color:var(--ink); outline:none; width:70px; text-align:center; }
 .settings-input:focus { border-color:var(--ink-3); background:var(--surface); }
+.settings-input.full { width:100%; text-align:left; box-sizing:border-box; }
 .settings-select { appearance:none; border:0.5px solid var(--line); background:var(--surface-2); border-radius:8px; padding:6px 28px 6px 10px; font-family:var(--font-sans); font-size:12px; color:var(--ink); outline:none; cursor:pointer; background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 9px center; }
 .settings-select:focus { border-color:var(--ink-3); }
 .settings-pill { display:flex; background:var(--surface-2); border-radius:999px; padding:2px; border:0.5px solid var(--line); flex-shrink:0; }
@@ -344,6 +366,36 @@ body {
 .typing-dots span:nth-child(2) { animation-delay:0.2s; }
 .typing-dots span:nth-child(3) { animation-delay:0.4s; }
 @keyframes typingBlink { 0%,60%,100%{opacity:0.3;} 30%{opacity:1;} }
+
+/* ── Notifications ─────────────────────────────────────────────────────── */
+.notif-wrap { position:relative; }
+.notif-badge { position:absolute; top:-4px; right:-4px; min-width:14px; height:14px; background:var(--accent); color:#fff; font-size:9px; font-weight:700; border-radius:7px; display:flex; align-items:center; justify-content:center; padding:0 3px; pointer-events:none; }
+.notif-panel { position:absolute; top:calc(100% + 6px); right:0; width:280px; max-height:380px; background:var(--surface); border:0.5px solid var(--line); border-radius:12px; box-shadow:var(--shadow); z-index:200; display:flex; flex-direction:column; overflow:hidden; }
+.notif-panel-hdr { display:flex; align-items:center; justify-content:space-between; padding:11px 13px 9px; border-bottom:0.5px solid var(--line-soft); flex-shrink:0; }
+.notif-panel-title { font-size:11px; font-weight:600; color:var(--ink); letter-spacing:.04em; text-transform:uppercase; }
+.notif-clear { font-size:10px; color:var(--ink-3); background:none; border:none; cursor:pointer; padding:2px 4px; border-radius:4px; }
+.notif-clear:hover { color:var(--ink-2); background:var(--surface-2); }
+.notif-list { overflow-y:auto; flex:1; }
+.notif-empty { padding:28px 16px; text-align:center; font-size:11px; color:var(--ink-3); }
+.notif-item { padding:11px 13px; border-bottom:0.5px solid var(--line-soft); display:flex; gap:9px; transition:background .12s; }
+.notif-item:last-child { border-bottom:none; }
+.notif-item:hover { background:var(--surface-2); }
+.notif-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; margin-top:4px; }
+.notif-dot.info    { background:#60a5fa; }
+.notif-dot.success { background:var(--accent); }
+.notif-dot.warning { background:#f59e0b; }
+.notif-dot.error   { background:#ef4444; }
+.notif-body { flex:1; min-width:0; }
+.notif-item-title { font-size:11px; font-weight:600; color:var(--ink); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.notif-item-msg { font-size:11px; color:var(--ink-2); line-height:1.45; }
+.notif-item-time { font-size:9px; color:var(--ink-3); margin-top:3px; font-family:var(--font-mono); }
+.notif-toast { position:fixed; top:48px; right:16px; max-width:288px; min-width:220px; background:var(--surface); border:0.5px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:11px 13px; display:flex; gap:9px; align-items:flex-start; z-index:400; animation:notifSlideDown .22s ease; }
+@keyframes notifSlideDown { from{transform:translateY(-12px);opacity:0;} to{transform:translateY(0);opacity:1;} }
+.notif-toast-body { flex:1; min-width:0; }
+.notif-toast-title { font-size:11px; font-weight:600; color:var(--ink); margin-bottom:2px; }
+.notif-toast-msg { font-size:11px; color:var(--ink-2); line-height:1.4; }
+.notif-toast-close { flex-shrink:0; background:none; border:none; color:var(--ink-3); cursor:pointer; padding:0; line-height:1; display:flex; align-items:center; }
+.notif-toast-close:hover { color:var(--ink); }
 </style>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
@@ -386,9 +438,12 @@ const Icon = {
   Collapse: (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" {...p}><path d="M5 2v3H2M7 2v3h3M5 10V7H2M7 10V7h3"/></svg>,
   Close:    (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...p}><path d="M3 3l6 6M9 3l-6 6"/></svg>,
   Send:     (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M2 6l8-4-3 9-2-4-3-1z"/></svg>,
+  ThumbUp:  (p) => <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" {...p}><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>,
+  ThumbDown:(p) => <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" {...p}><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L10.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>,
   Sparkle:  (p) => <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" {...p}><path d="M5 0l.9 3.2L9 4l-3.1.9L5 8l-.9-3.1L1 4l3.1-.8z"/></svg>,
   Settings: (p) => <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" {...p}><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M3 3l1.4 1.4M9.6 9.6L11 11M3 11l1.4-1.4M9.6 4.4L11 3"/></svg>,
   Back:     (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M8 2L4 6l4 4"/></svg>,
+  Bell:     (p) => <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M7 1.5a4 4 0 0 1 4 4c0 2.8 1.2 3.8 1.5 4.5H1.5c.3-.7 1.5-1.7 1.5-4.5a4 4 0 0 1 4-4z"/><path d="M5.8 10.5a1.2 1.2 0 0 0 2.4 0"/></svg>,
 };
 
 // ── BreakTransition ──────────────────────────────────────────────────────────
@@ -407,8 +462,25 @@ function BreakTransition({ restDurationMin }) {
   );
 }
 
+// ── ReturnToWork ─────────────────────────────────────────────────────────────
+function ReturnToWork({ onReturn }) {
+  return (
+    <div className="return-to-work">
+      <div className="rtw-label">Break over</div>
+      <div className="break-icon" style={{ borderColor:'var(--ink-3)', animation:'none' }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color:'var(--ink-3)' }}>
+          <circle cx="12" cy="12" r="10"/><path d="M9 12h6M12 9l3 3-3 3"/>
+        </svg>
+      </div>
+      <div className="rtw-heading">Back to it</div>
+      <div className="rtw-sub">Ready when you are</div>
+      <button className="rtw-btn" onClick={onReturn}>Get back to work →</button>
+    </div>
+  );
+}
+
 // ── ArtReveal ────────────────────────────────────────────────────────────────
-function ArtReveal({ piece, loading, onDismiss, onNext }) {
+function ArtReveal({ piece, loading, onDismiss, onReturn, onNext }) {
   const [tab, setTab] = useState('about');
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatBusy, setChatBusy] = useState(false);
@@ -468,7 +540,7 @@ function ArtReveal({ piece, loading, onDismiss, onNext }) {
           <div style={{ color:'var(--ink-3)', fontSize:'12px', textAlign:'center' }}>Couldn't load a recommendation right now.</div>
           <div className="art-actions">
             <button onClick={onNext}>Try again</button>
-            <button className="primary" onClick={onDismiss}>Back to work</button>
+            <button className="primary" onClick={onReturn}>Back to work</button>
           </div>
         </div>
       </div>
@@ -511,7 +583,10 @@ function ArtReveal({ piece, loading, onDismiss, onNext }) {
           </div>
           <div>
             <div className="art-title">{piece.title}</div>
-            <div className="art-meta">{piece.artist} · {piece.year}</div>
+            <div className="art-meta">
+              <span>{piece.artist} · {piece.year}</span>
+              {piece.source && <span className="art-source">{piece.source}</span>}
+            </div>
           </div>
           <div className="art-caption">{piece.caption}</div>
           {piece.story && <div className="art-caption" style={{ color:'var(--ink-2)', fontSize:'12px' }}>{piece.story}</div>}
@@ -527,9 +602,20 @@ function ArtReveal({ piece, loading, onDismiss, onNext }) {
               Listen on YouTube Music
             </a>
           )}
+          {piece.cat === 'Story' && piece.url && (
+            <a
+              href={piece.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display:'flex', alignItems:'center', gap:6, padding:'8px 12px', borderRadius:10, background:'var(--accent-weak)', color:'var(--accent)', fontSize:12, fontWeight:500, textDecoration:'none', border:'0.5px solid var(--accent)', width:'fit-content' }}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6h8M6 2l4 4-4 4"/></svg>
+              Read full story
+            </a>
+          )}
           <div className="art-actions">
             <button onClick={onNext}>Show another</button>
-            <button className="primary" onClick={onDismiss}>Back to work</button>
+            <button className="primary" onClick={onReturn}>Back to work</button>
           </div>
         </div>
       )}
@@ -566,7 +652,7 @@ function ArtReveal({ piece, loading, onDismiss, onNext }) {
 }
 
 // ── SettingsPanel ────────────────────────────────────────────────────────────
-function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, sysAudioDevice, setSysAudioDevice }) {
+function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, sysAudioDevice, setSysAudioDevice, pluginsVersion }) {
   const [s, setS]           = useState(null);   // server settings
   const [auth, setAuth]     = useState({});
   const [sysDevices, setSysDevices]     = useState(null);  // macOS audio output list
@@ -577,9 +663,24 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [upnpDevices,      setUpnpDevices]      = useState([]);
   const [upnpScanning,     setUpnpScanning]     = useState(false);
   const [upnpRenderer,     setUpnpRenderer]     = useState(null); // { name, controlUrl }
-  const [promptDraft, setPromptDraft]       = useState('');
-  const [restPrefsDraft, setRestPrefsDraft] = useState('');
-  const [locationDraft, setLocationDraft]   = useState('');
+  const [promptDraft, setPromptDraft]               = useState('');
+  const [restPrefsDraft, setRestPrefsDraft]         = useState('');
+  const [storyInterestsDraft, setStoryInterestsDraft] = useState('');
+  const [routinesDraft, setRoutinesDraft]           = useState('');
+  const [moodRulesDraft, setMoodRulesDraft]         = useState('');
+  const [tasteDraft, setTasteDraft]                 = useState('');
+  const [locationDraft, setLocationDraft]           = useState('');
+  const [plugins, setPlugins]                       = useState([]);
+  const [addingPlugin, setAddingPlugin]             = useState(false);
+  const [newPlugin, setNewPlugin]                   = useState({ name:'', description:'', baseUrl:'' });
+  const [installUrl, setInstallUrl]                 = useState('');
+  const [installState, setInstallState]             = useState('idle'); // idle|loading|error
+  const [editingRaw, setEditingRaw]                 = useState(false);
+  const [rawDraft, setRawDraft]                     = useState('');
+  const [rawError, setRawError]                     = useState('');
+  const [rawSaving, setRawSaving]                   = useState(false);
+  const [musicConnectors, setMusicConnectors]       = useState([]);
+  const [connectorKeyDrafts, setConnectorKeyDrafts] = useState({});
 
   useEffect(() => {
     if (!open) return;
@@ -587,19 +688,39 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       fetch('/api/settings').then(r => r.ok ? r.json() : Promise.reject(r.status)),
       fetch('/api/settings/auth-status').then(r => r.ok ? r.json() : Promise.reject(r.status)),
       fetch('/api/settings/rest-prefs').then(r => r.ok ? r.json() : Promise.reject(r.status)),
-    ]).then(([settingsRes, authRes, prefsRes]) => {
+      fetch('/api/settings/story-interests').then(r => r.ok ? r.json() : Promise.reject(r.status)),
+      fetch('/api/plugins').then(r => r.ok ? r.json() : []),
+      fetch('/api/music-connectors').then(r => r.ok ? r.json() : []),
+      fetch('/api/settings/routines').then(r => r.ok ? r.json() : {}),
+      fetch('/api/settings/mood-rules').then(r => r.ok ? r.json() : {}),
+      fetch('/api/settings/taste').then(r => r.ok ? r.json() : {}),
+    ]).then(([settingsRes, authRes, prefsRes, storyRes, pluginsRes, connectorsRes, routinesRes, moodRes, tasteRes]) => {
       const settings = settingsRes.status === 'fulfilled' ? settingsRes.value : {};
       const authStatus = authRes.status === 'fulfilled' ? authRes.value : {};
       const restPrefs = prefsRes.status === 'fulfilled' ? prefsRes.value : { content: '' };
+      const storyInterests = storyRes.status === 'fulfilled' ? storyRes.value : { content: '' };
       if (settingsRes.status === 'rejected') console.warn('[Settings] load failed:', settingsRes.reason);
       if (prefsRes.status === 'rejected') console.warn('[Settings] rest-prefs load failed — restart server?', prefsRes.reason);
       setS(settings);
       setAuth(authStatus);
       setPromptDraft(settings.prompt ?? '');
       setRestPrefsDraft(restPrefs.content ?? '');
+      setStoryInterestsDraft(storyInterests.content ?? '');
+      setRoutinesDraft(routinesRes.status === 'fulfilled' ? (routinesRes.value.content ?? '') : '');
+      setMoodRulesDraft(moodRes.status === 'fulfilled' ? (moodRes.value.content ?? '') : '');
+      setTasteDraft(tasteRes.status === 'fulfilled' ? (tasteRes.value.content ?? '') : '');
       setLocationDraft(settings.location ?? '');
+      setPlugins(pluginsRes.status === 'fulfilled' ? pluginsRes.value : []);
+      setMusicConnectors(connectorsRes.status === 'fulfilled' ? connectorsRes.value : []);
     });
   }, [open]);
+
+  // Hot-reload: re-fetch plugins and connectors whenever plugins.json changes
+  useEffect(() => {
+    if (!open || pluginsVersion === 0) return;
+    fetch('/api/plugins').then(r => r.ok ? r.json() : []).then(setPlugins).catch(() => {});
+    fetch('/api/music-connectors').then(r => r.ok ? r.json() : []).then(setMusicConnectors).catch(() => {});
+  }, [pluginsVersion]);
 
   const save = (patch) => {
     // Normalise dotted API keys → the flat field names the UI reads from `s`
@@ -615,6 +736,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
     }
     if ('tts.voice'   in patch) body['tts.voice']   = patch['tts.voice'];
     if ('mood.energy' in patch) body['mood.energy']  = patch['mood.energy'];
+    if ('chatSpeak'   in patch) body.chatSpeak       = patch.chatSpeak;
     fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
   };
 
@@ -625,6 +747,22 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
 
   const saveRestPrefs = () => {
     fetch('/api/settings/rest-prefs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: restPrefsDraft }) });
+  };
+
+  const saveStoryInterests = () => {
+    fetch('/api/settings/story-interests', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: storyInterestsDraft }) });
+  };
+
+  const saveRoutines = () => {
+    fetch('/api/settings/routines', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: routinesDraft }) });
+  };
+
+  const saveMoodRules = () => {
+    fetch('/api/settings/mood-rules', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: moodRulesDraft }) });
+  };
+
+  const saveTaste = () => {
+    fetch('/api/settings/taste', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: tasteDraft }) });
   };
 
   const saveLocation = () => {
@@ -648,6 +786,45 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
     }, 2000);
   };
 
+  const connectConnector = async (connector) => {
+    if (connector.authType !== 'oauth2') return;
+    let authUrl;
+    try {
+      const r = await fetch(`/api/music-connectors/${encodeURIComponent(connector.name)}/auth-init`, { method: 'POST' });
+      const d = await r.json();
+      authUrl = d.authUrl;
+    } catch { return; }
+    if (!authUrl) return;
+    const w = window.open(authUrl, `${connector.name}-auth`, 'width=600,height=700,left=200,top=100');
+    let polls = 0;
+    const poll = setInterval(async () => {
+      polls++;
+      if (polls > 30) { clearInterval(poll); return; }
+      try {
+        const status = await fetch(`/api/music-connectors/${encodeURIComponent(connector.name)}/auth-status`).then(r => r.json());
+        if (status.connected) {
+          setMusicConnectors(prev => prev.map(c => c.name === connector.name ? { ...c, connected: true, user: status.user ?? null } : c));
+          clearInterval(poll);
+        }
+      } catch {}
+      if (w && w.closed) clearInterval(poll);
+    }, 2000);
+  };
+
+  const saveConnectorKey = async (name, key) => {
+    if (!key.trim()) return;
+    await fetch(`/api/music-connectors/${encodeURIComponent(name)}/api-key`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+    });
+    setMusicConnectors(prev => prev.map(c => c.name === name ? { ...c, connected: true } : c));
+    setConnectorKeyDrafts(prev => ({ ...prev, [name]: '' }));
+  };
+
+  const disconnectConnector = async (name) => {
+    await fetch(`/api/music-connectors/${encodeURIComponent(name)}/revoke`, { method: 'POST' });
+    setMusicConnectors(prev => prev.map(c => c.name === name ? { ...c, connected: false, user: null } : c));
+  };
+
   const sync = async () => {
     setSyncing(true); setSyncMsg('');
     try {
@@ -662,6 +839,68 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
     setClearing(true);
     await fetch('/api/settings/queue/clear', { method:'POST' }).catch(() => {});
     setClearing(false);
+  };
+
+  const togglePlugin = async (name) => {
+    await fetch(`/api/plugins/${encodeURIComponent(name)}/toggle`, { method:'POST' });
+    setPlugins(prev => prev.map(p => p.name === name ? { ...p, enabled: !p.enabled } : p));
+  };
+
+  const deletePlugin = async (name) => {
+    await fetch(`/api/plugins/${encodeURIComponent(name)}`, { method:'DELETE' });
+    setPlugins(prev => prev.filter(p => p.name !== name));
+  };
+
+  const addPlugin = async () => {
+    if (!newPlugin.name.trim() || !newPlugin.baseUrl.trim()) return;
+    const plugin = { ...newPlugin, enabled: true, endpoints: {} };
+    await fetch('/api/plugins', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(plugin) });
+    setPlugins(prev => { const idx = prev.findIndex(p => p.name === plugin.name); return idx >= 0 ? prev.map((p,i) => i===idx ? plugin : p) : [...prev, plugin]; });
+    setNewPlugin({ name:'', description:'', baseUrl:'' });
+    setAddingPlugin(false);
+  };
+
+  const openRawEditor = () => {
+    setRawDraft(JSON.stringify(plugins, null, 2));
+    setRawError('');
+    setEditingRaw(true);
+  };
+
+  const saveRaw = async () => {
+    setRawError('');
+    let parsed;
+    try {
+      parsed = JSON.parse(rawDraft);
+      if (!Array.isArray(parsed)) throw new Error('Must be a JSON array [ … ]');
+    } catch (e) {
+      setRawError(e.message);
+      return;
+    }
+    setRawSaving(true);
+    try {
+      const r = await fetch('/api/plugins/raw', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content: rawDraft }) });
+      const d = await r.json();
+      if (!r.ok) { setRawError(d.error ?? 'Save failed'); return; }
+      setPlugins(parsed);
+      setEditingRaw(false);
+    } catch (e) {
+      setRawError(e.message);
+    } finally {
+      setRawSaving(false);
+    }
+  };
+
+  const installFromUrl = async () => {
+    if (!installUrl.trim()) return;
+    setInstallState('loading');
+    try {
+      const r = await fetch('/api/plugins/install-from-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ url: installUrl.trim() }) });
+      const d = await r.json();
+      if (!r.ok) { setInstallState('error'); return; }
+      setPlugins(prev => { const idx = prev.findIndex(p => p.name === d.plugin.name); return idx >= 0 ? prev.map((p,i) => i===idx ? d.plugin : p) : [...prev, d.plugin]; });
+      setInstallUrl('');
+      setInstallState('idle');
+    } catch { setInstallState('error'); }
   };
 
   const VOICES = {
@@ -752,6 +991,68 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               )}
             </div>
           ))}
+          {musicConnectors.length > 0 && (
+            <>
+              <div style={{ fontFamily:'var(--font-mono)', fontSize:'9px', letterSpacing:'0.08em', textTransform:'uppercase', color:'var(--ink-3)', marginTop:10, marginBottom:6 }}>Custom Connectors</div>
+              {musicConnectors.map(connector => {
+                const keyDraft = connectorKeyDrafts[connector.name] ?? '';
+                const needsKey = connector.authType === 'apikey' || connector.authType === 'token';
+                const iconStyle = connector.color
+                  ? { background: connector.color + '22', borderColor: connector.color + '44' }
+                  : {};
+                return (
+                  <div key={connector.name} className="auth-row">
+                    <div className="auth-icon" style={iconStyle}>
+                      {connector.icon
+                        ? <span style={{ fontSize:14 }}>{connector.icon}</span>
+                        : <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{ opacity:0.5 }}><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+                      }
+                    </div>
+                    <div className="auth-info">
+                      <div className="auth-name">{connector.displayName}</div>
+                      <div className={`auth-status-text ${connector.connected ? 'connected' : 'disconnected'}`}>
+                        {connector.connected
+                          ? `● Connected${connector.user ? ' · ' + connector.user : ''}`
+                          : '○ Not connected'
+                        }
+                      </div>
+                    </div>
+                    {connector.authType === 'none' && (
+                      <span style={{ fontFamily:'var(--font-mono)', fontSize:'9.5px', color:'var(--accent)' }}>Active</span>
+                    )}
+                    {connector.authType === 'oauth2' && !connector.connected && (
+                      <button className="settings-btn" onClick={() => connectConnector(connector)}>Connect →</button>
+                    )}
+                    {connector.authType === 'oauth2' && connector.connected && (
+                      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                        <span style={{ fontFamily:'var(--font-mono)', fontSize:'9.5px', color:'var(--accent)' }}>✓</span>
+                        <button className="settings-btn" style={{ fontSize:'9px', padding:'3px 8px' }}
+                          onClick={() => disconnectConnector(connector.name)}>Disconnect</button>
+                      </div>
+                    )}
+                    {needsKey && !connector.connected && (
+                      <div style={{ display:'flex', gap:4 }}>
+                        <input className="settings-input" type="password"
+                          style={{ width:110, fontSize:10, padding:'3px 6px' }}
+                          placeholder="Enter key…"
+                          value={keyDraft}
+                          onChange={e => setConnectorKeyDrafts(prev => ({ ...prev, [connector.name]: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && saveConnectorKey(connector.name, keyDraft)}/>
+                        <button className="settings-btn" onClick={() => saveConnectorKey(connector.name, keyDraft)}>Save</button>
+                      </div>
+                    )}
+                    {needsKey && connector.connected && (
+                      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                        <span style={{ fontFamily:'var(--font-mono)', fontSize:'9.5px', color:'var(--accent)' }}>✓</span>
+                        <button className="settings-btn" style={{ fontSize:'9px', padding:'3px 8px' }}
+                          onClick={() => disconnectConnector(connector.name)}>Disconnect</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>
 
         {/* AI */}
@@ -771,6 +1072,16 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               onChange={e => save({ 'tts.voice': e.target.value })}>
               {voiceOptions.map(v => <option key={v} value={v}>{voiceLabel(v)}</option>)}
             </select>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-label">Speak answers</div>
+            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
+              <input type="checkbox"
+                checked={s.chatSpeak !== false}
+                onChange={e => save({ chatSpeak: e.target.checked })}
+                style={{ accentColor:'var(--accent)', width:14, height:14 }}/>
+              <span style={{ fontSize:12, color:'var(--ink-2)' }}>DJ reads chat answers aloud</span>
+            </label>
           </div>
           <div className="settings-row" style={{ alignItems:'flex-start', flexDirection:'column', gap:8 }}>
             <div className="settings-row-label">Energy</div>
@@ -799,6 +1110,46 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               value={restPrefsDraft}
               onChange={e => setRestPrefsDraft(e.target.value)}
               onBlur={saveRestPrefs}/>
+          </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
+            <div className="settings-row-label" style={{ marginBottom:6 }}>Story interests</div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Topics the DJ searches for when suggesting a Story break — AI builders, indie projects, tech discoveries</div>
+            <textarea className="settings-textarea" style={{ minHeight: 110 }}
+              placeholder="e.g. building with AI, Show HN, LLM experiments, creative coding, startup lessons…"
+              value={storyInterestsDraft}
+              onChange={e => setStoryInterestsDraft(e.target.value)}
+              onBlur={saveStoryInterests}/>
+          </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
+            <div className="settings-row-label" style={{ marginBottom:6 }}>Listening routines</div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Describe your typical listening patterns — the DJ reads this to plan sessions. Saved to <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>routines.md</code></div>
+            <textarea className="settings-textarea" style={{ minHeight: 110 }}
+              placeholder="e.g. I usually work 9–5 Mon–Fri. Mornings I want energy, afternoons focus music, evenings chill. Weekends are for exploring new artists."
+              value={routinesDraft}
+              onChange={e => setRoutinesDraft(e.target.value)}
+              onBlur={saveRoutines}/>
+          </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
+            <div className="settings-row-label" style={{ marginBottom:6 }}>Mood rules</div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Override the DJ's default energy logic for specific situations. Saved to <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>mood-rules.md</code></div>
+            <textarea className="settings-textarea" style={{ minHeight: 110 }}
+              placeholder="e.g. Never play sad songs before noon. If it's raining, lean melancholic. On Fridays, go upbeat after 4pm."
+              value={moodRulesDraft}
+              onChange={e => setMoodRulesDraft(e.target.value)}
+              onBlur={saveMoodRules}/>
+          </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
+            <div className="settings-row-label" style={{ marginBottom:6 }}>Taste profile</div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Auto-generated from your library sync — edit to add notes, genres, or nuances the AI should know. Saved to <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>taste.md</code></div>
+            <textarea className="settings-textarea" style={{ minHeight: 140 }}
+              placeholder="Run a sync first to populate this, then add your own notes…"
+              value={tasteDraft}
+              onChange={e => setTasteDraft(e.target.value)}
+              onBlur={saveTaste}/>
           </div>
         </div>
 
@@ -926,6 +1277,72 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
         </div>
         
         <div className="settings-section">
+          <div className="settings-section-label">Plugins</div>
+          {plugins.length === 0 && !addingPlugin && (
+            <p style={{ fontSize:11, color:'var(--ink-3)', margin:'0 0 10px' }}>No plugins installed. Add one to let the DJ fetch external content like podcasts.</p>
+          )}
+          {plugins.map(p => (
+            <div key={p.name} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:12, fontWeight:600, color:'var(--ink-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
+                {p.baseUrl && <div style={{ fontSize:10, color:'var(--ink-3)', fontFamily:'var(--font-mono)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.baseUrl}</div>}
+              </div>
+              <label style={{ display:'flex', alignItems:'center', gap:4, cursor:'pointer', flexShrink:0 }}>
+                <input type="checkbox" checked={!!p.enabled} onChange={() => togglePlugin(p.name)} style={{ accentColor:'var(--accent)', width:14, height:14 }}/>
+                <span style={{ fontSize:10, color:'var(--ink-2)' }}>{p.enabled ? 'ON' : 'OFF'}</span>
+              </label>
+              <button className="settings-btn" style={{ padding:'2px 8px', fontSize:10 }} onClick={() => deletePlugin(p.name)}>Remove</button>
+            </div>
+          ))}
+          <div style={{ display:'flex', gap:6, marginTop:4, alignItems:'center' }}>
+            <input className="settings-input full" style={{ flex:1 }} placeholder="http://…  unix:///path/to.sock  stdio://node /path/to/plugin.js" value={installUrl} onChange={e => { setInstallUrl(e.target.value); setInstallState('idle'); }} onKeyDown={e => e.key === 'Enter' && installFromUrl()}/>
+            <button className="settings-btn primary" style={{ flexShrink:0 }} onClick={installFromUrl} disabled={installState === 'loading'}>
+              {installState === 'loading' ? '…' : installState === 'error' ? 'Failed' : 'Install'}
+            </button>
+          </div>
+          <p style={{ fontSize:10, color:'var(--ink-3)', margin:'4px 0 8px' }}>HTTP, Unix socket (unix://), or subprocess (stdio://) — the app fetches the manifest and registers it automatically.</p>
+          {addingPlugin ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:4 }}>
+              <input className="settings-input full" placeholder="Plugin name (e.g. briefcast)" value={newPlugin.name} onChange={e => setNewPlugin(p=>({...p,name:e.target.value}))}/>
+              <input className="settings-input full" placeholder="Base URL (e.g. http://localhost:3001)" value={newPlugin.baseUrl} onChange={e => setNewPlugin(p=>({...p,baseUrl:e.target.value}))}/>
+              <input className="settings-input full" placeholder="Description (optional)" value={newPlugin.description} onChange={e => setNewPlugin(p=>({...p,description:e.target.value}))}/>
+              <div style={{ display:'flex', gap:8 }}>
+                <button className="settings-btn primary" onClick={addPlugin}>Add</button>
+                <button className="settings-btn" onClick={() => { setAddingPlugin(false); setNewPlugin({name:'',description:'',baseUrl:''}); }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button className="settings-btn" onClick={() => setAddingPlugin(true)}>+ Add manually</button>
+          )}
+
+          {editingRaw ? (
+            <div style={{ marginTop:12 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style={{ flexShrink:0 }}>
+                  <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 3.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4.5zm0 7a.875.875 0 1 1 0-1.75.875.875 0 0 1 0 1.75z" fill="oklch(0.7 0.18 60)"/>
+                </svg>
+                <span style={{ fontSize:10, color:'oklch(0.7 0.18 60)', lineHeight:1.4 }}>
+                  Editing raw JSON. Invalid JSON will not be saved. Changes are hot-reloaded — no restart needed.
+                </span>
+              </div>
+              <textarea
+                value={rawDraft}
+                onChange={e => { setRawDraft(e.target.value); setRawError(''); }}
+                spellCheck={false}
+                style={{ width:'100%', boxSizing:'border-box', minHeight:220, fontFamily:'var(--font-mono)', fontSize:10.5, lineHeight:1.55, background:'var(--surface-2)', border:`0.5px solid ${rawError ? 'oklch(0.65 0.18 25)' : 'var(--line)'}`, borderRadius:8, color:'var(--ink)', padding:'8px 10px', resize:'vertical', outline:'none' }}
+              />
+              {rawError && <div style={{ fontSize:10, color:'oklch(0.65 0.18 25)', marginTop:4, fontFamily:'var(--font-mono)' }}>{rawError}</div>}
+              <div style={{ display:'flex', gap:8, marginTop:8 }}>
+                <button className="settings-btn primary" onClick={saveRaw} disabled={rawSaving}>{rawSaving ? 'Saving…' : 'Save'}</button>
+                <button className="settings-btn" onClick={() => { setEditingRaw(false); setRawError(''); }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button className="settings-btn" style={{ marginTop:10 }} onClick={openRawEditor}>Edit plugins.json</button>
+          )}
+        </div>
+
+        <div className="settings-section">
           <div className="settings-section-label">Library</div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
             <button className="settings-btn primary" onClick={sync} disabled={syncing}>
@@ -942,16 +1359,39 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   );
 }
 
+// ── Notification sound — two-tone chime via Web Audio API ───────────────────
+function playNotificationSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const chime = (freq, start, dur, vol = 0.18) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(vol, start);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      osc.start(start);
+      osc.stop(start + dur);
+    };
+    const t = ctx.currentTime;
+    chime(1047, t,        0.18); // C6
+    chime(1319, t + 0.12, 0.22); // E6
+  } catch {}
+}
+
 // ── SeensWidget ──────────────────────────────────────────────────────────────
 function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, categoryFilter, setCategoryFilter }) {
   // ── state
   const [now, setNow]                   = useState(new Date());
   const [sessionSecs, setSessionSecs]   = useState(0);
   const [weather, setWeather]           = useState(null); // { icon, tempC }
-  const [sessionStart]                  = useState(Date.now());
+  const [sessionStart, setSessionStart] = useState(null);
   const [playing, setPlaying]           = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [upNextTrack, setUpNextTrack]   = useState(null);
+  const [trackFeedback, setTrackFeedback] = useState(null); // null | 'like' | 'dislike'
   const [progress, setProgress]         = useState(0);
   const [timeCur, setTimeCur]           = useState('0:00');
   const [timeTotal, setTimeTotal]       = useState('0:00');
@@ -961,10 +1401,12 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const [restPiece, setRestPiece]       = useState(null);
   const [restPieceLoading, setRestPieceLoading] = useState(false);
   const prefetchedRestRef               = useRef(null); // { piece, ttsUrl } — pre-loaded before break
+  const restSessionRef                  = useRef(0);    // incremented each time a rest begins; guards stale fetches
   const [activeTab, setActiveTab]       = useState('queue');
   const [djMessages, setDjMessages]     = useState([]);
   const [djText, setDjText]             = useState('Waiting for DJ...');
   const [djAgent, setDjAgent]           = useState('');
+  const [sessionCtx, setSessionCtx]     = useState('');
   const [djBusy, setDjBusy]             = useState(false);
   const [queue, setQueue]               = useState([]);
   const [started, setStarted]           = useState(false);
@@ -1002,6 +1444,13 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const waitForInteractRef   = useRef(false);
   const wsRef                = useRef(null);
   const reconnectDelayRef    = useRef(1000);
+  const [notifications,    setNotifications]    = useState([]);
+  const [unreadCount,      setUnreadCount]      = useState(0);
+  const [showNotifications,setShowNotifications]= useState(false);
+  const [toast,            setToast]            = useState(null);
+  const toastTimerRef        = useRef(null);
+  const [pluginPiece,      setPluginPiece]      = useState(null); // rest-piece sourced from a plugin
+  const [pluginsVersion,   setPluginsVersion]   = useState(0);   // bumped when plugins.json changes on disk
 
   const categoryFilterRef = useRef(categoryFilter);
 
@@ -1051,6 +1500,14 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           ipFallback();
         }
       })
+      .catch(() => {});
+  }, []);
+
+  // ── load existing session context on mount (carries over if the app was reloaded mid-session)
+  useEffect(() => {
+    fetch('/api/settings/session/context')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.context) setSessionCtx(data.context); })
       .catch(() => {});
   }, []);
 
@@ -1210,6 +1667,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 
   const triggerRestRef = useRef(null);
   const endRestRef     = useRef(null);
+  const returnRestRef  = useRef(null);
 
   // ── session timer (ticks while not resting)
   useEffect(() => {
@@ -1259,7 +1717,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     const i = setInterval(() => {
       setSessionSecs(s => {
         const next = s + 1;
-        if (next >= restDurationMin * 60) { endRestRef.current?.(); return 0; }
+        if (next >= restDurationMin * 60) { returnRestRef.current?.(); return 0; }
         return next;
       });
     }, 1000);
@@ -1271,20 +1729,36 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     if (resting) {
       preRestSizeRef.current = size;
       if (size === 'mini') setSize('expanded');
-      // Use prefetched piece if already ready, else fetch now
+      // Stamp this rest session so async callbacks can detect they've gone stale
+      restSessionRef.current += 1;
+      const sessionId = restSessionRef.current;
+      // Use prefetched piece, or a plugin-sourced piece, or fetch from API
       const cached = prefetchedRestRef.current;
       if (cached && cached !== 'loading' && cached.piece) {
         console.log('[Rest] using prefetched piece:', cached.piece.title);
         setRestPiece(cached.piece);
         setRestPieceLoading(false);
+      } else if (pluginPiece) {
+        console.log('[Rest] using plugin piece:', pluginPiece.title);
+        setRestPiece({ title: pluginPiece.title, body: pluginPiece.text, imageUrl: pluginPiece.imageUrl, url: pluginPiece.sourceUrl, source: pluginPiece.source, cat: 'Plugin' });
+        setRestPieceLoading(false);
+        setPluginPiece(null);
       } else {
         setRestPieceLoading(true);
         setRestPiece(null);
         const cat = categoryFilter !== 'All' ? `?cat=${encodeURIComponent(categoryFilter)}` : '';
         fetch(`/api/rest-piece${cat}`)
           .then(r => r.json())
-          .then(p => { setRestPiece(p.error ? { _error: p.error } : p); setRestPieceLoading(false); })
-          .catch(e => { setRestPiece({ _error: e.message ?? 'Failed to load' }); setRestPieceLoading(false); });
+          .then(p => {
+            if (restSessionRef.current !== sessionId) return; // stale — a newer rest has started
+            setRestPiece(p.error ? { _error: p.error } : p);
+            setRestPieceLoading(false);
+          })
+          .catch(e => {
+            if (restSessionRef.current !== sessionId) return;
+            setRestPiece({ _error: e.message ?? 'Failed to load' });
+            setRestPieceLoading(false);
+          });
       }
     } else {
       if (preRestSizeRef.current && preRestSizeRef.current !== size) setSize(preRestSizeRef.current);
@@ -1327,16 +1801,18 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 
   // ── DJ narration when artwork is revealed (placed after enqueueTTS so we can use it)
   const narratedPieceRef = useRef(null);
+  const narratePollRef   = useRef(null); // tracks the narration-prefetch poll so it can be cancelled
   useEffect(() => {
     if (restPhase !== 'reveal' || !restPiece || restPiece._error) return;
     if (narratedPieceRef.current === restPiece) return; // already narrated this piece
     narratedPieceRef.current = restPiece;
+    const pieceSnapshot = restPiece; // capture so async callbacks can detect staleness
 
     // Wait for the artwork fade-in transition (0.65s CSS) to finish before speaking
     const revealDelay = setTimeout(() => {
       // Use prefetched TTS if already available for this piece
       const cached = prefetchedRestRef.current;
-      if (cached && cached !== 'loading' && cached.piece === restPiece && cached.ttsUrl) {
+      if (cached && cached !== 'loading' && cached.piece === pieceSnapshot && cached.ttsUrl) {
         console.log('[Narrate] using prefetched TTS:', cached.ttsUrl);
         enqueueTTS(cached.ttsUrl);
         prefetchedRestRef.current = null; // consumed
@@ -1346,7 +1822,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       // If prefetch is still in-flight, wait briefly for it then fall back to fresh fetch
       const tryEnqueue = () => {
         const c = prefetchedRestRef.current;
-        if (c && c !== 'loading' && c.piece === restPiece && c.ttsUrl) {
+        if (c && c !== 'loading' && c.piece === pieceSnapshot && c.ttsUrl) {
           console.log('[Narrate] prefetch caught up:', c.ttsUrl);
           enqueueTTS(c.ttsUrl);
           prefetchedRestRef.current = null;
@@ -1358,27 +1834,36 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       // Poll briefly (up to 5s) for in-flight prefetch to complete, then fall back
       let attempts = 0;
       const poll = setInterval(() => {
+        // Bail if the user has moved on to a different piece
+        if (narratedPieceRef.current !== pieceSnapshot) { clearInterval(poll); narratePollRef.current = null; return; }
         attempts++;
-        if (tryEnqueue()) { clearInterval(poll); return; }
+        if (tryEnqueue()) { clearInterval(poll); narratePollRef.current = null; return; }
         if (attempts >= 10) {
           clearInterval(poll);
+          narratePollRef.current = null;
+          if (narratedPieceRef.current !== pieceSnapshot) return; // stale
           console.log('[Narrate] prefetch not ready — fetching fresh narration');
           fetch('/api/rest-narrate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ piece: restPiece }),
+            body: JSON.stringify({ piece: pieceSnapshot }),
           })
             .then(r => r.ok ? r.json() : null)
             .then(data => {
-              if (!data?.url) { console.warn('[Narrate] no TTS url returned'); return; }
+              if (!data?.url || narratedPieceRef.current !== pieceSnapshot) return; // stale
               enqueueTTS(data.url);
             })
             .catch(err => console.warn('[Narrate] fetch error:', err.message));
         }
       }, 500);
+      narratePollRef.current = poll;
     }, 800); // wait for artwork fade-in to complete before speaking
 
-    return () => clearTimeout(revealDelay);
+    return () => {
+      clearTimeout(revealDelay);
+      clearInterval(narratePollRef.current);
+      narratePollRef.current = null;
+    };
   }, [restPhase, restPiece, enqueueTTS]);
 
   const updateUpNext = useCallback((upNext) => {
@@ -1576,6 +2061,11 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   // ── WS connection
   useEffect(() => {
     const handleDJResponse = (msg) => {
+      // Ignore any in-flight responses that arrive after the user ended the session.
+      // startedRef is set to false synchronously inside exitSession, so this guard
+      // correctly discards delayed replies from the server.
+      if (!startedRef.current) return;
+
       if (msg.say) {
         setDjText(msg.say);
         setDjMessages(prev => [...prev, { from:'dj', text:msg.say, time:fmtClock(new Date()) }]);
@@ -1588,11 +2078,6 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           now: i === 0,
         })));
       }
-      if (msg.say || msg.firstTrack) {
-        setStarted(true);
-        startedRef.current = true;
-      }
-      if (!startedRef.current) return;
       const audio = audioRef.current;
       const audioActive = playingRef.current || ttsPlayingRef.current || (audio.src && !audio.ended && !audio.error);
       const userAsked = msg.trigger === 'user-chat';
@@ -1606,19 +2091,31 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         if (msg.ttsUrl) {
           pendingIntroTTSRef.current = msg.ttsUrl;
           transitionReqRef.current = true;
+        } else if (msg.trigger === 'auto-refill' && msg.play?.length > 0) {
+          // Auto-refill added new tracks silently (no TTS generated server-side).
+          // Reset so the onTimeUpdate transition check can fire for the first new track
+          // and generate a proper intro when the current song is nearly done.
+          transitionReqRef.current = false;
         }
       } else if (audioActive && userAsked) {
         if (intent === 'now') {
-          if (msg.firstTrack) coldStartTrackRef.current = msg.firstTrack;
-          else skipAfterTTSRef.current = true;
-          if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
-          else skipNextRef.current();
+          if (msg.firstTrack) {
+            // DJ introduced a new track — speak intro then switch
+            coldStartTrackRef.current = msg.firstTrack;
+            if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
+            else skipNextRef.current();
+          } else {
+            // Conversational response (no new track) — just speak TTS, keep current song playing
+            if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
+          }
         } else if (intent === 'next') {
           if (msg.ttsUrl) { pendingIntroTTSRef.current = msg.ttsUrl; transitionReqRef.current = true; }
           const nt = msg.firstTrack ?? msg.play?.[0];
           if (nt) setUpNextTrack({ title: nt.resolvedTitle??nt.title, artist: nt.resolvedArtist??nt.artist??'' });
+        } else if (intent === 'end' && msg.ttsUrl && !msg.firstTrack) {
+          // Conversational answer queued at 'end' (no new music) — speak it without interrupting playback
+          enqueueTTS(msg.ttsUrl);
         }
-        // 'end': no interruption, just show text
       } else {
         // cold start
         if (msg.ttsUrl && msg.firstTrack) {
@@ -1652,6 +2149,23 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           else if (msg.action === 'resume') audioRef.current.play().catch(()=>{});
           else if (msg.action === 'next') skipNextRef.current();
         }
+        else if (msg.type === 'notification') {
+          setNotifications(prev => [msg, ...prev].slice(0, 50));
+          setUnreadCount(c => c + 1);
+          playNotificationSound();
+          clearTimeout(toastTimerRef.current);
+          setToast(msg);
+          toastTimerRef.current = setTimeout(() => setToast(null), 8000);
+        }
+        else if (msg.type === 'plugin-rest-piece') {
+          setPluginPiece({ title: msg.title, imageUrl: msg.imageUrl, text: msg.text, sourceUrl: msg.sourceUrl, source: msg.source });
+        }
+        else if (msg.type === 'plugins-changed') {
+          setPluginsVersion(v => v + 1);
+        }
+        else if (msg.type === 'session-context') {
+          setSessionCtx(msg.context ?? '');
+        }
       };
       ws.onclose = () => {
         setConnected(false);
@@ -1667,11 +2181,13 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     setOverlayLabel('Tuning in…');
     startedRef.current = true;
     setStarted(true);
+    setSessionStart(Date.now());
     userChatPendingRef.current = true; // expect a user-chat dj-response; block scheduler
     waitForInteractRef.current = false;
 
     try {
       await fetch('/api/settings/queue/clear', { method: 'POST' });
+      await fetch('/api/settings/session/start', { method: 'POST' });
       const chatRes = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1726,6 +2242,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         .catch(() => { preBreakWindowSize.current = { width: 380, height: 700 }; });
       window.__electron__.resizeWindow(460, 820);
     }
+    setSessionSecs(0); // reset so the rest auto-end timer always counts from 0
     setResting(true);
     if (skipTransition) {
       // Manual "Take a break" — go straight to artwork
@@ -1739,10 +2256,15 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 
   const endRest = useCallback(() => {
     clearTimeout(restPhaseTimer.current);
+    clearInterval(narratePollRef.current);
+    narratePollRef.current = null;
     ttsRef.current.pause();
     ttsRef.current.src = '';
+    ttsQueueRef.current         = []; // discard any queued narration so it can't play after rest ends
+    ttsPlayingRef.current       = false;
     narratedPieceRef.current    = null;
     prefetchedRestRef.current   = null;
+    restSessionRef.current     += 1;  // invalidate any in-flight piece fetch
     setResting(false);
     setRestPhase(null);
     setSessionSecs(0);
@@ -1767,9 +2289,37 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     }
   }, []);
 
+  // Reset like/dislike whenever a new track starts
+  useEffect(() => { setTrackFeedback(null); }, [currentTrack?.videoId]);
+
+  const submitFeedback = useCallback((rating) => {
+    if (!currentTrack) return;
+    setTrackFeedback(prev => {
+      const next = prev === rating ? null : rating; // toggle off if same button
+      if (next !== null) {
+        fetch('/api/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            videoId: currentTrack.videoId ?? currentTrack.video_id ?? null,
+            title:   currentTrack.resolvedTitle  ?? currentTrack.title,
+            artist:  currentTrack.resolvedArtist ?? currentTrack.artist ?? '',
+            rating:  next,
+          }),
+        }).catch(() => {});
+      }
+      return next;
+    });
+  }, [currentTrack]);
+
+  const returnRest = useCallback(() => {
+    setRestPhase('return');
+  }, []);
+
   // keep refs in sync so timer effects (stale closures) can call them
-  useEffect(() => { triggerRestRef.current = triggerRest; }, [triggerRest]);
-  useEffect(() => { endRestRef.current     = endRest;     }, [endRest]);
+  useEffect(() => { triggerRestRef.current  = triggerRest; },  [triggerRest]);
+  useEffect(() => { endRestRef.current      = endRest;     },  [endRest]);
+  useEffect(() => { returnRestRef.current   = returnRest;  },  [returnRest]);
 
   // ── exit session — stop everything and return to initial landing state
   const exitSession = useCallback(() => {
@@ -1796,6 +2346,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     setResting(false);
     setRestPhase(null);
     setStarted(false);
+    setSessionStart(null);
     startedRef.current = false;
     setPlaying(false);
     setCurrentTrack(null);
@@ -1805,6 +2356,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     setDjText('Waiting for DJ...');
     setDjAgent('');
     setDjBusy(false);
+    setSessionCtx('');
     setSessionSecs(0);
     setTimeCur('0:00');
     setTimeTotal('0:00');
@@ -1813,6 +2365,14 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     fetch('/api/settings/queue/clear', { method: 'POST' }).catch(() => {});
   }, []);
   const nextPiece = () => {
+    // Cancel any in-flight narration for the current piece before replacing it
+    clearInterval(narratePollRef.current);
+    narratePollRef.current = null;
+    narratedPieceRef.current = null; // allow the next piece to be narrated
+    ttsRef.current.pause();
+    ttsRef.current.src = '';
+    ttsQueueRef.current   = []; // discard queued narration for the piece we're leaving
+    ttsPlayingRef.current = false;
     setRestPieceLoading(true);
     setRestPiece(null);
     const cat = categoryFilter !== 'All' ? `?cat=${encodeURIComponent(categoryFilter)}` : '';
@@ -1827,7 +2387,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const sessionProgress = Math.min(1, sessionSecs / target);
   const sessionRemaining = Math.max(0, target - sessionSecs);
   const hh = pad2(now.getHours()), mm = pad2(now.getMinutes()), ss = pad2(now.getSeconds());
-  const startHHMM = fmtClock(new Date(sessionStart));
+  const startHHMM = sessionStart ? fmtClock(new Date(sessionStart)) : null;
   const trackTitle  = currentTrack?.resolvedTitle  ?? currentTrack?.title  ?? 'Seens Radio';
   const trackArtist = currentTrack?.resolvedArtist ?? currentTrack?.artist ?? 'Your AI DJ';
 
@@ -1846,11 +2406,11 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     sendChat(t);
   };
 
-  const categories = ['All','Music','Painting','Photograph','Film','Poem','Place','Building','Sculpture'];
+  const categories = ['All','Music','Painting','Photograph','Film','Poem','Place','Building','Sculpture','Food','Story'];
 
   return (
     <div
-      className={`widget ${size} ${resting ? 'resting' : ''} ${restPhase === 'reveal' ? 'rest-reveal' : ''}`}
+      className={`widget ${size} ${resting ? 'resting' : ''} ${restPhase === 'reveal' ? 'rest-reveal' : ''} ${restPhase === 'return' ? 'rest-return' : ''}`}
       data-theme={dark ? 'dark' : 'light'}
       style={{ '--accent': accent, ...(isElectronApp ? { width:'100%', height:'100vh', borderRadius:0, boxShadow:'none', overflow:'hidden', transition:'none' } : {}) }}
     >
@@ -1863,6 +2423,37 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           <div className="theme-pill">
             <button className={!dark?'active':''} onClick={() => setDark(false)}>L</button>
             <button className={dark?'active':''} onClick={() => setDark(true)}>D</button>
+          </div>
+          <div className="notif-wrap">
+            <button className="size-toggle" onClick={() => { setShowNotifications(v => !v); if (!showNotifications) setUnreadCount(0); }} aria-label="Notifications">
+              <Icon.Bell/>
+              {unreadCount > 0 && <span className="notif-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>}
+            </button>
+            {showNotifications && (
+              <div className="notif-panel">
+                <div className="notif-panel-hdr">
+                  <span className="notif-panel-title">Notifications</span>
+                  {notifications.length > 0 && (
+                    <button className="notif-clear" onClick={() => setNotifications([])}>Clear all</button>
+                  )}
+                </div>
+                <div className="notif-list">
+                  {notifications.length === 0
+                    ? <div className="notif-empty">No notifications yet</div>
+                    : notifications.map(n => (
+                      <div key={n.id} className="notif-item" onClick={() => n.link && window.open(n.link, '_blank')}>
+                        <div className={`notif-dot ${n.level ?? 'info'}`}/>
+                        <div className="notif-body">
+                          <div className="notif-item-title">{n.title}</div>
+                          <div className="notif-item-msg">{n.message}</div>
+                          <div className="notif-item-time">{fmtClock(new Date(n.ts))}</div>
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+            )}
           </div>
           <button className="size-toggle settings-open-btn" onClick={() => setShowSettings(true)} aria-label="Settings">
             <Icon.Settings/>
@@ -1907,8 +2498,8 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
           <div className="session-progress"><i style={{ width:`${sessionProgress*100}%` }}/></div>
           <div className="session-meta">
             {size === 'mini'
-              ? <span style={{ margin:'0 auto' }}>STARTED {startHHMM}</span>
-              : <><span>STARTED {startHHMM}</span><span>REST IN {fmtDuration(sessionRemaining)}</span></>
+              ? <span style={{ margin:'0 auto' }}>{startHHMM ? `STARTED ${startHHMM}` : ''}</span>
+              : <>{startHHMM && <span>STARTED {startHHMM}</span>}<span>REST IN {fmtDuration(sessionRemaining)}</span></>
             }
           </div>
         </div>
@@ -1926,6 +2517,22 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
             <div className="track-artist">{trackArtist}</div>
             {upNextTrack && <div className="track-state">Up next: {upNextTrack.title}</div>}
           </div>
+          {currentTrack && size !== 'mini' && (
+            <div className="track-feedback">
+              <button
+                className={`fb-btn${trackFeedback === 'like' ? ' liked' : ''}`}
+                title="Love this"
+                onClick={() => submitFeedback('like')}>
+                <Icon.ThumbUp/>
+              </button>
+              <button
+                className={`fb-btn${trackFeedback === 'dislike' ? ' disliked' : ''}`}
+                title="Not for me"
+                onClick={() => submitFeedback('dislike')}>
+                <Icon.ThumbDown/>
+              </button>
+            </div>
+          )}
           <div className="transport">
             <button className="tr-btn" onClick={() => skipNextRef.current()} aria-label="Previous"><Icon.Prev/></button>
             <button className="tr-btn play" onClick={() => {
@@ -1947,136 +2554,105 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         <div className="progress-times"><span>{timeCur}</span><span>{timeTotal}</span></div>
         <div className="vol" style={{ paddingTop:'6px' }}>
           <Icon.Vol/>
-          <input type="range" min={0} max={100} value={volume} style={{ width:'100%' }}
+          <input type="range" min={0} max={100} value={volume}
             onChange={e => { const v = Number(e.target.value); setVolume(v); audioRef.current.volume = v / 100; }}/>
-        </div>
-        {(upnpRenderer || airplayInSafari || sysAudioDevice || isElectron) && size !== 'mini' && (
-          <div className="cast-row" style={{ display:'flex', gap:6, paddingTop:6, flexWrap:'wrap', position:'relative' }}>
-            {upnpRenderer && (
-              <button title={`Casting to ${upnpRenderer.name} — click to stop`}
-                style={{ appearance:'none', border:'0.5px solid var(--accent)', background:'var(--accent-weak)', color:'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
-                onClick={() => {
-                  fetch('/api/upnp/stop', { method:'POST' }).catch(() => {});
-                  fetch('/api/upnp/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(() => setUpnpRenderer(null));
-                }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v12h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                {upnpRenderer.name}
-              </button>
-            )}
-            {airplayInSafari && (
+          {/* AirPlay icon button — right of volume slider */}
+          {(airplayInSafari || isElectron) && size !== 'mini' && (
+            <div style={{ position:'relative', flexShrink:0 }}>
               <button
-                title={airplayActive ? 'AirPlay active — click to change output' : 'Cast via AirPlay'}
-                style={{ appearance:'none', border:'0.5px solid var(--accent)', background: airplayActive ? 'var(--accent)' : 'var(--accent-weak)', color: airplayActive ? 'var(--bg)' : 'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
-                onClick={() => {
-                  audioRef.current?.webkitShowPlaybackTargetPicker?.();
-                }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                {airplayActive ? 'AirPlay ●' : 'AirPlay'}
+                className={`vol-airplay-btn${(airplayActive || sysAudioDevice || raopDevice || electronSysPicker) ? ' active' : ''}`}
+                title={sysAudioDevice ? `AirPlay: ${sysAudioDevice.name} — click to stop` : raopDevice ? `AirPlay: ${raopDevice.name} — click to stop` : airplayActive ? 'AirPlay active — click to change output' : 'AirPlay'}
+                onClick={airplayInSafari
+                  ? () => audioRef.current?.webkitShowPlaybackTargetPicker?.()
+                  : async () => {
+                      if (sysAudioDevice) {
+                        await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+                        setSysAudioDevice(null);
+                      } else if (raopDevice) {
+                        await fetch('/api/airplay/stop', { method:'POST' }).catch(() => {});
+                        await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).catch(() => {});
+                        audioRef.current.muted = false;
+                        setRaopDevice(null);
+                      } else if (electronSysPicker) {
+                        setElectronSysPicker(false);
+                      } else {
+                        setElectronSysDevices([{ _scanning: true }]);
+                        setElectronSysPicker(true);
+                        const [sysRes, apRes] = await Promise.allSettled([
+                          fetch('/api/airplay/sys-devices').then(r => r.json()),
+                          fetch('/api/airplay/devices').then(r => r.json()),
+                        ]);
+                        const sysDevs = sysRes.status === 'fulfilled' && !sysRes.value.error
+                          ? (sysRes.value.devices ?? []).map(n => ({ name: n, type: 'sys' }))
+                          : [];
+                        const apDevs = apRes.status === 'fulfilled'
+                          ? (apRes.value.devices ?? []).map(d => ({ ...d, type: 'raop' }))
+                          : [];
+                        const merged = [...apDevs, ...sysDevs];
+                        setElectronSysDevices(merged.length ? merged : [{ _empty: true }]);
+                      }
+                    }
+                }>
+                {/* Apple-style AirPlay icon: screen outline + solid triangle */}
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h18a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2"/>
+                  <polygon points="12 15 17 21 7 21" fill="currentColor" stroke="none"/>
+                </svg>
               </button>
-            )}
-            {/* Electron: active device badge — click to restore original output */}
-            {(sysAudioDevice || raopDevice) && (
-              <button
-                title={`Audio output: ${(sysAudioDevice ?? raopDevice).name} — click to stop`}
-                style={{ appearance:'none', border:'0.5px solid var(--accent)', background:'var(--accent)', color:'var(--bg)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
-                onClick={async () => {
-                  if (raopDevice) {
-                    // Stop RAOP streaming and unmute local audio
-                    await fetch('/api/airplay/stop', { method:'POST' }).catch(() => {});
-                    await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).catch(() => {});
-                    audioRef.current.muted = false;
-                    setRaopDevice(null);
-                  } else {
-                    await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
-                    setSysAudioDevice(null);
-                  }
-                }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                {(sysAudioDevice ?? raopDevice).name} ●
-              </button>
-            )}
-            {/* Electron: AirPlay button — local outputs (SwitchAudioSource) + network AirPlay (mDNS) */}
-            {isElectron && !sysAudioDevice && !raopDevice && (
-              <div style={{ position:'relative' }}>
-                <button
-                  title="Route audio to AirPlay or other output"
-                  style={{ appearance:'none', border:'0.5px solid var(--accent)', background: electronSysPicker ? 'var(--accent)' : 'var(--accent-weak)', color: electronSysPicker ? 'var(--bg)' : 'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
-                  onClick={async () => {
-                    if (electronSysPicker) { setElectronSysPicker(false); return; }
-                    // Show immediately with scanning state, then populate
-                    setElectronSysDevices([{ _scanning: true }]);
-                    setElectronSysPicker(true);
-                    // Fetch local outputs and mDNS AirPlay devices in parallel
-                    const [sysRes, apRes] = await Promise.allSettled([
-                      fetch('/api/airplay/sys-devices').then(r => r.json()),
-                      fetch('/api/airplay/devices').then(r => r.json()),
-                    ]);
-                    const sysDevs = sysRes.status === 'fulfilled' && !sysRes.value.error
-                      ? (sysRes.value.devices ?? []).map(n => ({ name: n, type: 'sys' }))
-                      : [];
-                    const apDevs = apRes.status === 'fulfilled'
-                      ? (apRes.value.devices ?? []).map(d => ({ ...d, type: 'raop' }))
-                      : [];
-                    const merged = [...apDevs, ...sysDevs];
-                    setElectronSysDevices(merged.length ? merged : [{ _empty: true }]);
-                  }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M6 22h12l-6-6-6 6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-                  AirPlay
-                </button>
-                {electronSysPicker && (
-                  <div style={{ position:'absolute', bottom:'calc(100% + 4px)', left:0, background:'var(--surface)', border:'0.5px solid var(--line)', borderRadius:8, padding:'4px 0', minWidth:220, zIndex:200, boxShadow:'0 4px 16px rgba(0,0,0,0.25)' }}>
-                    {electronSysDevices.map((dev, i) => {
-                      if (dev._scanning) return (
-                        <div key="scan" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>Scanning…</div>
-                      );
-                      if (dev._empty) return (
-                        <div key="empty" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>No devices found</div>
-                      );
-                      if (dev._err) return (
-                        <div key={i} style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>{dev._err}</div>
-                      );
-                      return (
-                        <button key={dev.name + dev.type}
-                          style={{ display:'block', width:'100%', textAlign:'left', padding:'6px 12px', fontSize:11, fontFamily:'var(--font-mono)', background:'none', border:'none', color:'var(--ink)', cursor:'pointer' }}
-                          onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
-                          onMouseLeave={e => e.currentTarget.style.background='none'}
-                          onClick={async () => {
-                            if (dev.type === 'raop') {
-                              // Try sys-select first: if SwitchAudioSource is installed and the device
-                              // is a CoreAudio output, this routes ALL audio with zero extra work.
-                              const sysRes = await fetch('/api/airplay/sys-select', {
-                                method:'POST', headers:{'Content-Type':'application/json'},
-                                body: JSON.stringify({ name: dev.name }),
-                              }).then(r => r.json()).catch(() => null);
-
-                              if (sysRes?.ok) {
-                                setSysAudioDevice({ name: dev.name });
-                                // macOS needs ~800ms to switch CoreAudio output — then resume
-                                setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
-                              } else {
-                                // Fallback: server-side RAOP streaming via airtunes2
-                                await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name, host: dev.host, port: dev.port }) });
-                                setRaopDevice({ name: dev.name, host: dev.host, port: dev.port });
-                                // The raopDevice useEffect will fire immediately and start streaming
-                              }
+              {isElectron && electronSysPicker && (
+                <div style={{ position:'absolute', bottom:'calc(100% + 6px)', right:0, background:'var(--surface)', border:'0.5px solid var(--line)', borderRadius:8, padding:'4px 0', minWidth:220, zIndex:200, boxShadow:'0 4px 20px rgba(0,0,0,0.3)' }}>
+                  {electronSysDevices.map((dev, i) => {
+                    if (dev._scanning) return <div key="scan" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>Scanning…</div>;
+                    if (dev._empty)   return <div key="empty" style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>No devices found</div>;
+                    if (dev._err)     return <div key={i} style={{ padding:'8px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--ink-3)' }}>{dev._err}</div>;
+                    return (
+                      <button key={dev.name + dev.type}
+                        style={{ display:'block', width:'100%', textAlign:'left', padding:'6px 12px', fontSize:11, fontFamily:'var(--font-mono)', background:'none', border:'none', color:'var(--ink)', cursor:'pointer' }}
+                        onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
+                        onMouseLeave={e => e.currentTarget.style.background='none'}
+                        onClick={async () => {
+                          if (dev.type === 'raop') {
+                            const sysRes = await fetch('/api/airplay/sys-select', {
+                              method:'POST', headers:{'Content-Type':'application/json'},
+                              body: JSON.stringify({ name: dev.name }),
+                            }).then(r => r.json()).catch(() => null);
+                            if (sysRes?.ok) {
+                              setSysAudioDevice({ name: dev.name });
+                              setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
                             } else {
-                              const r = await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name }) });
-                              if ((await r.json().catch(() => ({}))).ok) {
-                                setSysAudioDevice({ name: dev.name });
-                                setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
-                              }
+                              await fetch('/api/airplay/select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name, host: dev.host, port: dev.port }) });
+                              setRaopDevice({ name: dev.name, host: dev.host, port: dev.port });
                             }
-                            setElectronSysPicker(false);
-                          }}>
-                          <span style={{ fontSize:9, opacity:0.5, marginRight:4 }}>{dev.type === 'raop' ? '📡' : '🔊'}</span>
-                          {dev.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
+                          } else {
+                            const r = await fetch('/api/airplay/sys-select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: dev.name }) });
+                            if ((await r.json().catch(() => ({}))).ok) {
+                              setSysAudioDevice({ name: dev.name });
+                              setTimeout(() => audioRef.current?.play().catch(() => {}), 900);
+                            }
+                          }
+                          setElectronSysPicker(false);
+                        }}>
+                        <span style={{ fontSize:9, opacity:0.5, marginRight:4 }}>{dev.type === 'raop' ? '📡' : '🔊'}</span>
+                        {dev.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {upnpRenderer && size !== 'mini' && (
+          <div className="cast-row" style={{ display:'flex', gap:6, paddingTop:6 }}>
+            <button title={`Casting to ${upnpRenderer.name} — click to stop`}
+              style={{ appearance:'none', border:'0.5px solid var(--accent)', background:'var(--accent-weak)', color:'var(--accent)', borderRadius:6, padding:'3px 9px', fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.08em', cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}
+              onClick={() => {
+                fetch('/api/upnp/stop', { method:'POST' }).catch(() => {});
+                fetch('/api/upnp/select', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(() => setUpnpRenderer(null));
+              }}>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v12h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
+              {upnpRenderer.name}
+            </button>
           </div>
         )}
       </div>
@@ -2112,6 +2688,12 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
             </div>
           ) : (
             <div className="chat">
+              {sessionCtx && (
+                <div className="session-ctx-bar">
+                  <span className="ctx-label">Session</span>
+                  <span className="ctx-text" title={sessionCtx}>{sessionCtx}</span>
+                </div>
+              )}
               <div className="chat-scroll" ref={chatScrollRef}>
                 {djMessages.map((m, i) => (
                   <div key={i} className={`msg ${m.from==='user'?'user':'dj'}`}>
@@ -2174,7 +2756,10 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       <BreakTransition restDurationMin={restDurationMin}/>
 
       {/* Art reveal */}
-      <ArtReveal piece={restPiece} loading={restPieceLoading} onDismiss={endRest} onNext={nextPiece}/>
+      <ArtReveal piece={restPiece} loading={restPieceLoading} onDismiss={endRest} onReturn={endRest} onNext={nextPiece}/>
+
+      {/* Return to work overlay */}
+      <ReturnToWork onReturn={endRest}/>
 
       {/* Audio element — must be in DOM and NOT display:none for Safari AirPlay routing.
            x-webkit-airplay is also set via setAttribute in useEffect (React may not forward it). */}
@@ -2191,7 +2776,22 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         setRestDurationMin={setRestDurationMin}
         sysAudioDevice={sysAudioDevice}
         setSysAudioDevice={setSysAudioDevice}
+        pluginsVersion={pluginsVersion}
       />
+
+      {/* Notification toast */}
+      {toast && (
+        <div className="notif-toast">
+          <div className={`notif-dot ${toast.level ?? 'info'}`} style={{ marginTop:4 }}/>
+          <div className="notif-toast-body">
+            <div className="notif-toast-title">{toast.title}</div>
+            <div className="notif-toast-msg">{toast.message}</div>
+          </div>
+          <button className="notif-toast-close" onClick={() => { clearTimeout(toastTimerRef.current); setToast(null); }}>
+            <Icon.Close/>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2216,6 +2816,18 @@ function App() {
   const [restIntervalMin, setRestIntervalMin] = useState(45);
   const [restDurationMin, setRestDurationMin] = useState(5);
   const [categoryFilter,  setCategoryFilter]  = useState('All');
+
+  // Restore persisted timer lengths on mount
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(s => {
+        if (!s) return;
+        if (s.workMin) setRestIntervalMin(parseInt(s.workMin) || 45);
+        if (s.restMin) setRestDurationMin(parseInt(s.restMin) || 5);
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <>

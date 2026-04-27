@@ -12,10 +12,11 @@
     "install-agent": "node scripts/install-agent.js",
     "electron": "electron electron/main.cjs",
     "electron:dev": "NODE_ENV=development electron electron/main.cjs",
-    "dist": "electron-builder --mac --arm64"
+    "dist": "npm run dist:mac",
+    "dist:mac": "npm run dist:mac:local",
+    "dist:mac:local": "SKIP_MAC_NOTARIZE=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 --dir -c.mac.forceCodeSigning=false -c.mac.identity=null && node scripts/post-sign-macos-local.cjs"
   },
   "dependencies": {
-    "airtunes2": "^2.0.0",
     "better-sqlite3": "^12.9.0",
     "bonjour-service": "^1.3.0",
     "dotenv": "^16.4.5",
@@ -26,6 +27,9 @@
     "spotify-web-api-node": "^5.0.2",
     "ws": "^8.18.0",
     "yt-search": "^2.13.1"
+  },
+  "optionalDependencies": {
+    "airtunes2": "^2.0.0"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -38,9 +42,15 @@
     "mac": {
       "category": "public.app-category.music",
       "icon": "electron/icon.icns",
+      "forceCodeSigning": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
         "NSLocationWhenInUseUsageDescription": "Seens Radio uses your location to show local weather and tailor the DJ context to your city.",
-        "NSLocationUsageDescription": "Seens Radio uses your location to show local weather and tailor the DJ context to your city."
+        "NSLocationUsageDescription": "Seens Radio uses your location to show local weather and tailor the DJ context to your city.",
+        "NSMicrophoneUsageDescription": "Seens Radio can use your microphone for voice-driven radio controls and audio features."
       },
       "target": [
         {
@@ -67,6 +77,9 @@
       "package.json"
     ],
     "extraFiles": [],
-    "asar": false
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/**/*.node"
+    ]
   }
 }

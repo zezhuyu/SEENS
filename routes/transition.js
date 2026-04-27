@@ -1,5 +1,5 @@
 import express from 'express';
-import { peekNext } from '../src/state.js';
+import { peekNext, addMessage } from '../src/state.js';
 import { generate } from '../src/ai/index.js';
 import { buildSystemPrompt } from '../src/context.js';
 import { synthesize } from '../src/tts.js';
@@ -36,6 +36,10 @@ router.post('/', async (req, res) => {
     }
 
     if (!say) say = `Coming up: ${nextTitle}${nextArtist ? ` by ${nextArtist}` : ''}.`;
+
+    // Store the segue intro so follow-up questions ("tell me more about this song")
+    // can reference what the DJ just introduced, not just what's audio-playing.
+    addMessage('assistant', say);
 
     const ttsResult = await synthesize(say).catch(err => {
       console.warn('[Transition] TTS error:', err.message);

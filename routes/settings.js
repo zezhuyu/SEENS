@@ -1,12 +1,14 @@
 import express from 'express';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { getPref, setPref, clearQueue } from '../src/state.js';
+import { getPref, setPref, clearQueue, setSessionStart, getSessionContext } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgent } from '../src/ai/index.js';
+import { ensureUserDir, userPath, readUserFile } from '../src/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REST_PREFS_PATH = path.join(__dirname, '../USER/rest-preferences.md');
+const REST_PREFS_PATH      = userPath('rest-preferences.md');
+const STORY_INTERESTS_PATH = userPath('story-interests.md');
+const ROUTINES_PATH        = userPath('routines.md');
+const MOOD_RULES_PATH      = userPath('mood-rules.md');
+const TASTE_PATH           = userPath('taste.md');
 
 const router = express.Router();
 
@@ -21,6 +23,7 @@ router.get('/', (req, res) => {
     location:    getPref('user.location',  ''),
     workMin:     parseInt(getPref('session.workMin', '45')),
     restMin:     parseInt(getPref('session.restMin', '5')),
+    chatSpeak:   getPref('tts.chatSpeak',  '1') !== '0',
     ttsProvider,
     availableAgents: AGENT_NAMES,
   });
@@ -28,11 +31,16 @@ router.get('/', (req, res) => {
 
 // POST /api/settings — update prefs
 router.post('/', (req, res) => {
-  const { 'tts.voice': voice, 'mood.energy': energy, prompt, workMin, restMin, location } = req.body;
-  if (voice    !== undefined) setPref('tts.voice',       voice);
-  if (energy   !== undefined) setPref('mood.energy',     energy);
-  if (prompt   !== undefined) setPref('user.prompt',     prompt);
-  if (location !== undefined) setPref('user.location',   location.trim());
+  const { 'tts.voice': voice, 'mood.energy': energy, prompt, workMin, restMin, location, chatSpeak } = req.body;
+  if (voice      !== undefined) setPref('tts.voice',       voice);
+  if (energy     !== undefined) setPref('mood.energy',     energy);
+  if (prompt     !== undefined) setPref('user.prompt',     prompt);
+  if (chatSpeak  !== undefined) setPref('tts.chatSpeak',   chatSpeak ? '1' : '0');
+  if (location !== undefined) {
+    const loc = location.trim();
+    setPref('user.location', loc);
+    setPref('user.location.pinned', loc ? '1' : '');
+  }
   if (workMin  !== undefined) setPref('session.workMin', String(parseInt(workMin) || 45));
   if (restMin  !== undefined) setPref('session.restMin', String(parseInt(restMin) || 5));
   res.json({ ok: true });
@@ -65,25 +73,50 @@ router.get('/auth-status', (req, res) => {
   });
 });
 
-// GET /api/settings/rest-prefs — read rest-preferences.md
-router.get('/rest-prefs', (req, res) => {
-  try { res.json({ content: fs.readFileSync(REST_PREFS_PATH, 'utf8') }); }
-  catch { res.json({ content: '' }); }
-});
+// Markdown file endpoints (read/write USER/*.md)
+// Reads via readUserFile so files in the dev-repo USER/ are visible before
+// the user saves for the first time (same two-path fallback as context.js).
+// Writes go to userPath() (Electron data dir) which takes priority thereafter.
+function mdRoutes(writePath, filename) {
+  return [
+    (req, res) => res.json({ content: readUserFile(filename) }),
+    (req, res) => {
+      const { content } = req.body;
+      if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
+      ensureUserDir();
+      fs.writeFileSync(writePath, content, 'utf8');
+      res.json({ ok: true });
+    },
+  ];
+}
 
-// POST /api/settings/rest-prefs — write rest-preferences.md
-router.post('/rest-prefs', (req, res) => {
-  const { content } = req.body;
-  if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
-  fs.mkdirSync(path.dirname(REST_PREFS_PATH), { recursive: true });
-  fs.writeFileSync(REST_PREFS_PATH, content, 'utf8');
-  res.json({ ok: true });
-});
+const [getRest,      postRest]      = mdRoutes(REST_PREFS_PATH,      'rest-preferences.md');
+const [getStory,     postStory]     = mdRoutes(STORY_INTERESTS_PATH,  'story-interests.md');
+const [getRoutines,  postRoutines]  = mdRoutes(ROUTINES_PATH,         'routines.md');
+const [getMoodRules, postMoodRules] = mdRoutes(MOOD_RULES_PATH,       'mood-rules.md');
+const [getTaste,     postTaste]     = mdRoutes(TASTE_PATH,            'taste.md');
+
+router.get('/rest-prefs',      getRest);       router.post('/rest-prefs',      postRest);
+router.get('/story-interests', getStory);      router.post('/story-interests', postStory);
+router.get('/routines',        getRoutines);   router.post('/routines',        postRoutines);
+router.get('/mood-rules',      getMoodRules);  router.post('/mood-rules',      postMoodRules);
+router.get('/taste',           getTaste);      router.post('/taste',           postTaste);
 
 // POST /api/settings/queue/clear — flush queue
 router.post('/queue/clear', (req, res) => {
   clearQueue();
   res.json({ ok: true });
+});
+
+// POST /api/settings/session/start — mark session start so the DJ remembers all instructions from it
+router.post('/session/start', (req, res) => {
+  setSessionStart();
+  res.json({ ok: true });
+});
+
+// GET /api/settings/session/context — current session context the DJ has captured
+router.get('/session/context', (req, res) => {
+  res.json({ context: getSessionContext() });
 });
 
 export default router;

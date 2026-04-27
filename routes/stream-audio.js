@@ -11,6 +11,8 @@
 import express from 'express';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 
 const router = express.Router();
 const execFileAsync = promisify(execFile);
@@ -70,13 +72,49 @@ async function _resolve(videoId) {
       console.log(`[Stream] Resolved ${videoId} (${label}) → ${url.slice(0, 80)}...`);
       return url;
     } catch (err) {
-      const detail = err.stderr?.trim().split('\n').pop() ?? err.message;
+      const stderrLast = err.stderr?.trim().split('\n').pop();
+      const detail = (stderrLast || err.message) || String(err);
       console.warn(`[Stream] yt-dlp ${label} failed for ${videoId}: ${detail}`);
       lastErr = new Error(`yt-dlp: ${detail}`);
     }
   }
   throw lastErr;
 }
+
+// GET /api/stream/proxy?url=... — proxy an external audio URL through the local server.
+// Used by plugin tracks so the browser audio element doesn't hit CORS restrictions.
+// Forwards Range headers so seekable playback works.
+router.get('/proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url || !/^https?:\/\//.test(url)) {
+    return res.status(400).json({ error: 'url query param required (http/https)' });
+  }
+  const upstreamHeaders = {};
+  if (req.headers.range) upstreamHeaders['Range'] = req.headers.range;
+
+  let upstream;
+  try {
+    upstream = await fetch(url, {
+      headers: upstreamHeaders,
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    return res.status(502).json({ error: err.message });
+  }
+
+  res.status(upstream.status);
+  for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+    const v = upstream.headers.get(h);
+    if (v) res.setHeader(h.replace(/(^|-)\w/g, m => m.toUpperCase()), v);
+  }
+  res.setHeader('Cache-Control', 'no-store');
+
+  try {
+    await pipeline(Readable.fromWeb(upstream.body), res);
+  } catch {
+    // client disconnect — normal
+  }
+});
 
 // GET /api/stream/:videoId — redirect browser to CDN URL
 // Redirecting (302) instead of proxying means Safari manages its own connection
