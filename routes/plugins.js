@@ -33,7 +33,8 @@ function isValidPluginUrl(url) {
   return /^https?:\/\//.test(url) ||
          /^(?:unix|socket|ipc):\/\/\//.test(url) ||
          /^\/.*\.sock(\/|$)/.test(url) ||
-         /^stdio:\/\//.test(url);
+         /^stdio:\/\//.test(url) ||
+         /^cli:\/\//.test(url);
 }
 
 // Install a plugin by fetching its manifest from any supported transport.
@@ -57,6 +58,29 @@ router.post('/install-from-url', async (req, res) => {
 
   if (!manifest.baseUrl) manifest.baseUrl = baseUrl;
   manifest.enabled = manifest.enabled ?? true;
+  manifest.endpoints = manifest.endpoints ?? {};
+
+  const plugins = loadPlugins();
+  const idx = plugins.findIndex(p => p.name === manifest.name);
+  if (idx >= 0) plugins[idx] = manifest;
+  else plugins.push(manifest);
+  savePlugins(plugins);
+
+  res.json({ ok: true, plugin: manifest });
+});
+
+// Install a plugin by uploading its manifest.json body directly.
+// Use this for CLI plugins or offline installs where fetching from a URL isn't possible.
+router.post('/install-from-manifest', (req, res) => {
+  const manifest = req.body;
+  if (!manifest?.name?.trim()) {
+    return res.status(400).json({ error: 'Manifest must include a "name" field' });
+  }
+  if (!manifest.baseUrl?.trim()) {
+    return res.status(400).json({ error: 'Manifest must include a "baseUrl" field (e.g. cli:///path/to/binary)' });
+  }
+
+  manifest.enabled  = manifest.enabled  ?? true;
   manifest.endpoints = manifest.endpoints ?? {};
 
   const plugins = loadPlugins();

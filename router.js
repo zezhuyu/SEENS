@@ -81,25 +81,6 @@ export async function handleInput(input, triggerType = 'user-chat') {
   if (djResponse.pluginCall?.plugin && djResponse.pluginCall?.endpoint) {
     const { plugin: pluginName, endpoint, params = {} } = djResponse.pluginCall;
     activePluginName = pluginName;
-
-    // Immediately broadcast the pass-1 "hold on" message so the user sees feedback right away.
-    // Pass-2 result will arrive as a second dj-response once the plugin data is ready.
-    if (djResponse.say) {
-      broadcast('dj-response', {
-        agent: agentName,
-        say: djResponse.say,
-        ttsUrl: null,
-        play: [],
-        firstTrack: null,
-        reason: djResponse.reason ?? '',
-        segue: '',
-        playIntent: 'end',
-        trigger: triggerType,
-        interim: true,
-      });
-      console.log(`[Router:${triggerType}] ${ts()} interim pass-1 broadcast: "${djResponse.say.slice(0, 80)}"`);
-    }
-
     try {
       console.log(`[Router:${triggerType}] ${ts()} plugin call → ${pluginName}/${endpoint} params=${JSON.stringify(params)}`);
       let pluginData = await callPlugin(pluginName, endpoint, params);
@@ -140,14 +121,8 @@ export async function handleInput(input, triggerType = 'user-chat') {
         `Always populate the "say" field with the actual content — never leave it empty, never say you are still fetching.`;
 
       console.log(`[Router:${triggerType}] ${ts()} running AI pass-2`);
-      // Pass-2 system prompt: strip plugin-call instructions (no pluginCall needed now)
-      // and Final Reminder (dedup not relevant when responding to fetched data).
-      // Keeping them causes the model to re-issue "let me fetch" instead of summarizing.
-      const pass2SystemPrompt = systemPrompt
-        .split('\n\n---\n\n## Plugins')[0]
-        .split('\n\n---\n\n## ⛔ Final Reminder')[0]
-        .trimEnd();
-      djResponse = await generate(pass2SystemPrompt, `[Data fetched for: "${trimmed}"]\n\n${pluginContext}`);
+      // Pass-2: "[Data fetched]" prefix stops AI from re-issuing a "let me fetch" phrase.
+      djResponse = await generate(systemPrompt, `[Data fetched for: "${trimmed}"]\n\n${pluginContext}`);
       console.log(`[Router:${triggerType}] ${ts()} AI pass-2 done`);
       console.log(`[Router:${triggerType}]   pluginAction=${JSON.stringify(djResponse.pluginAction ?? null)}`);
       console.log(`[Router:${triggerType}]   say="${djResponse.say?.slice(0, 100)}"`);

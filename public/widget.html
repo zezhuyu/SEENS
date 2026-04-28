@@ -681,6 +681,13 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [rawSaving, setRawSaving]                   = useState(false);
   const [musicConnectors, setMusicConnectors]       = useState([]);
   const [connectorKeyDrafts, setConnectorKeyDrafts] = useState({});
+  const [apiKeys, setApiKeys]                       = useState({});
+  const [apiKeyDrafts, setApiKeyDrafts]             = useState({});
+  const [apiKeySaving, setApiKeySaving]             = useState(false);
+  const [apiKeySaved, setApiKeySaved]               = useState('');
+  const [apiKeysOpen, setApiKeysOpen]               = useState(false);
+  const [manifestDraft, setManifestDraft]           = useState('');
+  const [manifestState, setManifestState]           = useState('idle');
 
   useEffect(() => {
     if (!open) return;
@@ -694,7 +701,8 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       fetch('/api/settings/routines').then(r => r.ok ? r.json() : {}),
       fetch('/api/settings/mood-rules').then(r => r.ok ? r.json() : {}),
       fetch('/api/settings/taste').then(r => r.ok ? r.json() : {}),
-    ]).then(([settingsRes, authRes, prefsRes, storyRes, pluginsRes, connectorsRes, routinesRes, moodRes, tasteRes]) => {
+      fetch('/api/settings/env-keys').then(r => r.ok ? r.json() : {}),
+    ]).then(([settingsRes, authRes, prefsRes, storyRes, pluginsRes, connectorsRes, routinesRes, moodRes, tasteRes, envKeysRes]) => {
       const settings = settingsRes.status === 'fulfilled' ? settingsRes.value : {};
       const authStatus = authRes.status === 'fulfilled' ? authRes.value : {};
       const restPrefs = prefsRes.status === 'fulfilled' ? prefsRes.value : { content: '' };
@@ -712,6 +720,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       setLocationDraft(settings.location ?? '');
       setPlugins(pluginsRes.status === 'fulfilled' ? pluginsRes.value : []);
       setMusicConnectors(connectorsRes.status === 'fulfilled' ? connectorsRes.value : []);
+      setApiKeys(envKeysRes.status === 'fulfilled' ? envKeysRes.value : {});
     });
   }, [open]);
 
@@ -890,6 +899,53 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
     }
   };
 
+  const saveApiKeys = async () => {
+    const payload = { 'TTS_PROVIDER': apiKeyDrafts['TTS_PROVIDER'] ?? (apiKeys['TTS_PROVIDER'] || s?.ttsProvider || 'say') };
+    const allKeys = [
+      'ELEVENLABS_API_KEY','ELEVENLABS_VOICE_ID',
+      'OPENAI_API_KEY','OPENAI_TTS_MODEL','OPENAI_TTS_VOICE',
+      'SPOTIFY_CLIENT_ID',
+      'YOUTUBE_CLIENT_ID','YOUTUBE_CLIENT_SECRET',
+      'GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET',
+      'MICROSOFT_CLIENT_ID','MICROSOFT_CLIENT_SECRET',
+      'APPLE_KEY_ID','APPLE_TEAM_ID','APPLE_PRIVATE_KEY_PATH',
+    ];
+    for (const key of allKeys) {
+      if (apiKeyDrafts[key]?.trim()) payload[key] = apiKeyDrafts[key].trim();
+    }
+    setApiKeySaving(true);
+    try {
+      const r = await fetch('/api/settings/env-keys', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      const data = await r.json();
+      setApiKeySaved(data.updated?.length ? `Saved: ${data.updated.join(', ')}` : 'No changes');
+      setApiKeyDrafts({});
+      fetch('/api/settings/env-keys').then(r => r.ok ? r.json() : {}).then(setApiKeys);
+    } catch(e) { setApiKeySaved('Error: ' + e.message); }
+    finally {
+      setApiKeySaving(false);
+      setTimeout(() => setApiKeySaved(''), 4000);
+    }
+  };
+
+  const installFromManifest = async () => {
+    if (!manifestDraft.trim()) return;
+    let manifest;
+    try { manifest = JSON.parse(manifestDraft); }
+    catch(e) { setManifestState('error:Invalid JSON — ' + e.message); return; }
+    setManifestState('loading');
+    try {
+      const r = await fetch('/api/plugins/install-from-manifest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(manifest) });
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      setManifestState('ok');
+      setManifestDraft('');
+      fetch('/api/plugins').then(r => r.ok ? r.json() : []).then(setPlugins);
+      setTimeout(() => setManifestState('idle'), 3000);
+    } catch(e) {
+      setManifestState('error:' + e.message);
+    }
+  };
+
   const installFromUrl = async () => {
     if (!installUrl.trim()) return;
     setInstallState('loading');
@@ -931,7 +987,13 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       <div className="settings-header">
         <button className="settings-back" onClick={onClose}><Icon.Prev/></button>
         <span className="settings-title">Settings</span>
-        <span style={{ fontFamily:'var(--font-mono)', fontSize:'9px', color:'var(--ink-3)' }}>SEENS · FM</span>
+        <button onClick={() => { setApiKeysOpen(true); }} title="API Keys & Credentials"
+          style={{ appearance:'none', border:'0.5px solid var(--line)', background:'var(--surface-2)', color:'var(--ink-3)', borderRadius:8, padding:'4px 8px', cursor:'pointer', fontFamily:'var(--font-mono)', fontSize:'9px', letterSpacing:'0.08em', display:'flex', alignItems:'center', gap:4, flexShrink:0 }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="8" cy="15" r="4"/><line x1="11" y1="12" x2="20" y2="3"/><line x1="18" y1="5" x2="21" y2="8"/>
+          </svg>
+          API Keys
+        </button>
       </div>
       <div className="settings-scroll">
 
@@ -1295,12 +1357,41 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
             </div>
           ))}
           <div style={{ display:'flex', gap:6, marginTop:4, alignItems:'center' }}>
-            <input className="settings-input full" style={{ flex:1 }} placeholder="http://…  unix:///path/to.sock  stdio://node /path/to/plugin.js" value={installUrl} onChange={e => { setInstallUrl(e.target.value); setInstallState('idle'); }} onKeyDown={e => e.key === 'Enter' && installFromUrl()}/>
+            <input className="settings-input full" style={{ flex:1 }} placeholder="http://…  unix:///path/to.sock  stdio://…  cli:///path/to/bin" value={installUrl} onChange={e => { setInstallUrl(e.target.value); setInstallState('idle'); }} onKeyDown={e => e.key === 'Enter' && installFromUrl()}/>
             <button className="settings-btn primary" style={{ flexShrink:0 }} onClick={installFromUrl} disabled={installState === 'loading'}>
               {installState === 'loading' ? '…' : installState === 'error' ? 'Failed' : 'Install'}
             </button>
           </div>
-          <p style={{ fontSize:10, color:'var(--ink-3)', margin:'4px 0 8px' }}>HTTP, Unix socket (unix://), or subprocess (stdio://) — the app fetches the manifest and registers it automatically.</p>
+          <p style={{ fontSize:10, color:'var(--ink-3)', margin:'4px 0 10px' }}>HTTP, Unix socket (unix://), subprocess (stdio://), or CLI binary (cli://) — fetches manifest and registers automatically.</p>
+          <div style={{ marginBottom:4 }}>
+            <textarea
+              className="settings-textarea"
+              rows={4}
+              placeholder={'Paste manifest.json — or upload a file:\n{"name":"my-plugin","baseUrl":"cli:///path/to/bin","description":"…","endpoints":{}}'}
+              value={manifestDraft}
+              onChange={e => { setManifestDraft(e.target.value); setManifestState('idle'); }}
+              style={{ minHeight:80, fontSize:11, fontFamily:'var(--font-mono)', marginBottom:6 }}
+            />
+            <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+              <label className="settings-btn" style={{ cursor:'pointer', flexShrink:0 }}>
+                Load file
+                <input type="file" accept=".json,application/json" style={{ display:'none' }}
+                  onChange={e => {
+                    const f = e.target.files?.[0]; if (!f) return;
+                    const reader = new FileReader();
+                    reader.onload = ev => { setManifestDraft(ev.target.result); setManifestState('idle'); };
+                    reader.readAsText(f);
+                    e.target.value = '';
+                  }}/>
+              </label>
+              <button className="settings-btn primary" style={{ flex:1 }} onClick={installFromManifest} disabled={manifestState === 'loading' || !manifestDraft.trim()}>
+                {manifestState === 'loading' ? 'Installing…' : manifestState === 'ok' ? '✓ Installed' : 'Install from manifest'}
+              </button>
+            </div>
+            {manifestState.startsWith('error:') && (
+              <div style={{ marginTop:5, fontSize:10, color:'oklch(0.65 0.18 25)', fontFamily:'var(--font-mono)' }}>{manifestState.slice(6)}</div>
+            )}
+          </div>
           {addingPlugin ? (
             <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:4 }}>
               <input className="settings-input full" placeholder="Plugin name (e.g. briefcast)" value={newPlugin.name} onChange={e => setNewPlugin(p=>({...p,name:e.target.value}))}/>
@@ -1355,6 +1446,80 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
         </div>
 
       </div>
+
+      {/* API Keys popup — slides up as a bottom sheet over the settings panel */}
+      {apiKeysOpen && (
+        <div onClick={e => { if (e.target === e.currentTarget) setApiKeysOpen(false); }}
+          style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.55)', zIndex:50, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}>
+          <div style={{ background:'var(--surface)', borderRadius:'14px 14px 0 0', display:'flex', flexDirection:'column', maxHeight:'88%' }}>
+            <div style={{ display:'flex', alignItems:'center', padding:'12px 16px 10px', borderBottom:'0.5px solid var(--line-soft)', flexShrink:0 }}>
+              <span style={{ fontFamily:'var(--font-mono)', fontSize:'10px', letterSpacing:'0.14em', textTransform:'uppercase', color:'var(--ink-3)', flex:1 }}>API Keys &amp; Credentials</span>
+              <button onClick={() => setApiKeysOpen(false)}
+                style={{ appearance:'none', border:0, background:'transparent', color:'var(--ink-3)', cursor:'pointer', fontSize:16, lineHeight:1, padding:'2px 4px', borderRadius:6 }}>✕</button>
+            </div>
+            <div style={{ overflowY:'auto', padding:'14px 16px 28px', display:'flex', flexDirection:'column', gap:14 }}>
+              <p style={{ fontSize:11, color:'var(--ink-3)', margin:0, lineHeight:1.5 }}>Leave a field blank to keep the existing value. Changes apply immediately without restart.</p>
+
+              {/* TTS */}
+              {[['Text-to-Speech',''],
+                ['TTS_PROVIDER','select'],
+                ['ELEVENLABS_API_KEY','password','ElevenLabs API Key'],
+                ['ELEVENLABS_VOICE_ID','text','ElevenLabs Voice ID'],
+                ['OPENAI_API_KEY','password','OpenAI API Key'],
+                ['OPENAI_TTS_MODEL','text','OpenAI TTS Model (e.g. tts-1)'],
+                ['OPENAI_TTS_VOICE','text','OpenAI TTS Voice (e.g. alloy)'],
+                ['Music Services',''],
+                ['SPOTIFY_CLIENT_ID','text','Spotify Client ID'],
+                ['YouTube / Google',''],
+                ['YOUTUBE_CLIENT_ID','text','YouTube Client ID'],
+                ['YOUTUBE_CLIENT_SECRET','password','YouTube Client Secret'],
+                ['GOOGLE_CLIENT_ID','text','Google Client ID'],
+                ['GOOGLE_CLIENT_SECRET','password','Google Client Secret'],
+                ['Microsoft / Outlook',''],
+                ['MICROSOFT_CLIENT_ID','text','Microsoft Client ID'],
+                ['MICROSOFT_CLIENT_SECRET','password','Microsoft Client Secret'],
+                ['Apple Music',''],
+                ['APPLE_KEY_ID','text','Apple Key ID'],
+                ['APPLE_TEAM_ID','text','Apple Team ID'],
+                ['APPLE_PRIVATE_KEY_PATH','text','Apple Private Key Path'],
+              ].map(([key, type, label]) => {
+                if (!type) return (
+                  <div key={key} style={{ fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.16em', textTransform:'uppercase', color:'var(--ink-3)', paddingTop:4, borderTop:'0.5px solid var(--line-soft)' }}>{key}</div>
+                );
+                if (key === 'TTS_PROVIDER') return (
+                  <div key={key} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
+                    <span style={{ fontSize:12, color:'var(--ink)' }}>Provider</span>
+                    <select className="settings-select"
+                      value={apiKeyDrafts['TTS_PROVIDER'] ?? (apiKeys['TTS_PROVIDER'] || s?.ttsProvider || 'say')}
+                      onChange={e => setApiKeyDrafts(d => ({...d, 'TTS_PROVIDER': e.target.value}))}>
+                      <option value="say">macOS say (free)</option>
+                      <option value="elevenlabs">ElevenLabs</option>
+                      <option value="openai">OpenAI</option>
+                    </select>
+                  </div>
+                );
+                const isSet = !!apiKeys[key];
+                return (
+                  <div key={key}>
+                    <div style={{ fontSize:11, color:'var(--ink-2)', marginBottom:4 }}>
+                      {label}{isSet && <span style={{ marginLeft:6, fontSize:9, color:'var(--accent)', fontFamily:'var(--font-mono)' }}>SET</span>}
+                    </div>
+                    <input className="settings-input full" type={type} autoComplete="off"
+                      placeholder={isSet ? '(currently set — type to replace)' : label}
+                      value={apiKeyDrafts[key] ?? ''}
+                      onChange={e => setApiKeyDrafts(d => ({...d, [key]: e.target.value}))}/>
+                  </div>
+                );
+              })}
+
+              <button className="settings-btn primary" onClick={async () => { await saveApiKeys(); setApiKeysOpen(false); }} disabled={apiKeySaving} style={{ marginTop:6 }}>
+                {apiKeySaving ? 'Saving…' : 'Save & Close'}
+              </button>
+              {apiKeySaved && <div style={{ fontSize:11, color:'var(--ink-3)', fontFamily:'var(--font-mono)', marginTop:-8 }}>{apiKeySaved}</div>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2812,10 +2977,13 @@ function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
   const [accent,          setAccent]          = useState('#33c173');
-  const [volume,          setVolume]          = useState(80);
+  const [volume,          setVolume]          = useState(() => parseInt(localStorage.getItem('seens-volume') ?? '80') || 80);
   const [restIntervalMin, setRestIntervalMin] = useState(45);
   const [restDurationMin, setRestDurationMin] = useState(5);
   const [categoryFilter,  setCategoryFilter]  = useState('All');
+
+  // Persist volume to localStorage whenever it changes
+  useEffect(() => { localStorage.setItem('seens-volume', String(volume)); }, [volume]);
 
   // Restore persisted timer lengths on mount
   useEffect(() => {

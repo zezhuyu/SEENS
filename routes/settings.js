@@ -1,8 +1,55 @@
 import express from 'express';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { getPref, setPref, clearQueue, setSessionStart, getSessionContext } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgent } from '../src/ai/index.js';
 import { ensureUserDir, userPath, readUserFile } from '../src/paths.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ENV_PATH = path.join(__dirname, '../.env');
+
+// Keys exposed via settings API — never include private auth tokens or key files
+const EXPOSED_ENV_KEYS = [
+  'TTS_PROVIDER',
+  'ELEVENLABS_API_KEY',
+  'ELEVENLABS_VOICE_ID',
+  'OPENAI_API_KEY',
+  'OPENAI_TTS_MODEL',
+  'OPENAI_TTS_VOICE',
+  'SPOTIFY_CLIENT_ID',
+  'YOUTUBE_CLIENT_ID',
+  'YOUTUBE_CLIENT_SECRET',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'MICROSOFT_CLIENT_ID',
+  'MICROSOFT_CLIENT_SECRET',
+  'APPLE_KEY_ID',
+  'APPLE_TEAM_ID',
+  'APPLE_PRIVATE_KEY_PATH',
+];
+
+function readEnvFile() {
+  try { return fs.readFileSync(ENV_PATH, 'utf8'); } catch { return ''; }
+}
+
+function writeEnvKey(key, value) {
+  let content = readEnvFile();
+  const regex = new RegExp(`^(#\\s*)?${key}=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (regex.test(content)) {
+    content = content.replace(regex, line);
+  } else {
+    content = content.trimEnd() + `\n${line}\n`;
+  }
+  fs.writeFileSync(ENV_PATH, content, 'utf8');
+  process.env[key] = value;
+}
+
+function maskValue(val) {
+  if (!val) return '';
+  return val.length <= 4 ? '****' : val.slice(0, 4) + '****';
+}
 
 const REST_PREFS_PATH      = userPath('rest-preferences.md');
 const STORY_INTERESTS_PATH = userPath('story-interests.md');
@@ -101,6 +148,28 @@ router.get('/story-interests', getStory);      router.post('/story-interests', p
 router.get('/routines',        getRoutines);   router.post('/routines',        postRoutines);
 router.get('/mood-rules',      getMoodRules);  router.post('/mood-rules',      postMoodRules);
 router.get('/taste',           getTaste);      router.post('/taste',           postTaste);
+
+// GET /api/settings/env-keys — current values masked (first 4 chars + ****)
+router.get('/env-keys', (req, res) => {
+  const result = {};
+  for (const key of EXPOSED_ENV_KEYS) {
+    result[key] = maskValue(process.env[key] ?? '');
+  }
+  res.json(result);
+});
+
+// POST /api/settings/env-keys — write to .env and hot-reload into process.env immediately
+router.post('/env-keys', (req, res) => {
+  const updated = [];
+  for (const key of EXPOSED_ENV_KEYS) {
+    const val = req.body[key];
+    if (typeof val === 'string' && val.trim() !== '') {
+      writeEnvKey(key, val.trim());
+      updated.push(key);
+    }
+  }
+  res.json({ ok: true, updated });
+});
 
 // POST /api/settings/queue/clear — flush queue
 router.post('/queue/clear', (req, res) => {

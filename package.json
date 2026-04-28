@@ -1,7 +1,7 @@
 {
   "name": "seens-radio",
   "version": "1.0.0",
-  "description": "Personal AI radio station for Mac — Claude/Codex DJ + Spotify/Apple Music/YouTube",
+  "description": "Personal AI radio station for Mac — Claude/Codex DJ + Spotify/Claude Music/YouTube",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -10,11 +10,11 @@
     "setup": "node scripts/setup.js",
     "sync": "node scripts/sync-music.js",
     "install-agent": "node scripts/install-agent.js",
+    "install-skill": "node scripts/install-skill-global.js",
     "electron": "electron electron/main.cjs",
     "electron:dev": "NODE_ENV=development electron electron/main.cjs",
-    "dist": "npm run dist:mac",
-    "dist:mac": "npm run dist:mac:local",
-    "dist:mac:local": "SKIP_MAC_NOTARIZE=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 --dir -c.mac.forceCodeSigning=false -c.mac.identity=null && node scripts/post-sign-macos-local.cjs"
+    "dist": "SKIP_MAC_NOTARIZE=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64 --dir -c.mac.forceCodeSigning=false -c.mac.identity=null && node scripts/post-sign-macos-local.cjs",
+    "update-app": "node scripts/update-app-asar.cjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",

@@ -21,6 +21,8 @@ export function savePlugins(plugins) {
 //   /absolute/path.sock      — bare socket path (auto-detected by .sock extension)
 //   stdio://node /path/to/plugin.js  — subprocess, JSON-RPC over stdin/stdout
 //   stdio:///path/to/executable
+//   cli:///path/to/binary    — CLI subprocess: runs `<binary> <endpoint> [<params-json>]`
+//   cli://command-on-PATH    — CLI subprocess via PATH lookup
 
 function socketPath(baseUrl) {
   const m = baseUrl.match(/^(?:unix|socket|ipc):\/\/(\/.*)/);
@@ -131,6 +133,62 @@ function callStdio({ bin, args, method, params = {} }) {
   });
 }
 
+// ── CLI transport ─────────────────────────────────────────────────────────────
+// baseUrl format:  cli:///path/to/binary   (absolute path)
+//                  cli://command-name       (resolved via PATH)
+//
+// Protocol: spawns  `<command> <endpoint> [<params-as-json-string>]`
+// Reads the last valid JSON line from stdout as the result.
+// The binary must exit 0 on success; non-zero exit is treated as an error.
+//
+// Minimal CLI plugin example (node):
+//   process.argv[2] is the endpoint name ("manifest", "latest", etc.)
+//   process.argv[3] is params as a JSON string (may be absent)
+//   Write result JSON to stdout and exit 0.
+
+function parseCliCommand(baseUrl) {
+  return baseUrl.replace(/^cli:\/\//, '') || '';
+}
+
+function callCli({ command, method, params = {} }) {
+  return new Promise((resolve, reject) => {
+    if (!command) return reject(new Error('CLI plugin: no command specified'));
+    const args = [method];
+    if (Object.keys(params).length > 0) args.push(JSON.stringify(params));
+
+    const proc = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+      shell: false,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', d => { stdout += d; });
+    proc.stderr.on('data', d => { stderr += d; });
+
+    const timer = setTimeout(() => { proc.kill(); reject(new Error('CLI plugin timeout (15s)')); }, 15_000);
+    proc.on('error', err => { clearTimeout(timer); reject(err); });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      const lines = stdout.trim().split('\n').reverse();
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const obj = JSON.parse(t);
+          if (obj.error) return reject(new Error(obj.error.message ?? JSON.stringify(obj.error)));
+          if (obj.result !== undefined) return resolve(obj.result);
+          return resolve(obj);
+        } catch { /* try next line */ }
+      }
+      reject(new Error(
+        `CLI plugin ${code !== 0 ? `exited ${code}` : 'returned no JSON'}${stderr ? `: ${stderr.slice(0, 200)}` : ''}`
+      ));
+    });
+  });
+}
+
 // pluginFetch handles HTTP(S) and Unix socket transports (request/response style).
 // For STDIO plugins use callPlugin / fetchPluginManifest which dispatch differently.
 export async function pluginFetch({ baseUrl, method = 'GET', httpPath = '/', body }) {
@@ -152,6 +210,10 @@ export async function pluginFetch({ baseUrl, method = 'GET', httpPath = '/', bod
 
 // Fetch the plugin manifest regardless of transport. Used by install-from-url.
 export async function fetchPluginManifest(baseUrl) {
+  if (baseUrl.startsWith('cli://')) {
+    const command = parseCliCommand(baseUrl);
+    return callCli({ command, method: 'manifest', params: {} });
+  }
   if (baseUrl.startsWith('stdio://')) {
     const { bin, args } = parseStdioCommand(baseUrl);
     return callStdio({ bin, args, method: 'manifest', params: {} });
@@ -178,6 +240,13 @@ export async function callPlugin(pluginName, endpointName, params = {}) {
   const endpoint = plugin.endpoints?.[endpointName];
   if (!endpoint) throw new Error(`Endpoint "${endpointName}" not found on plugin "${pluginName}"`);
 
+  // ── CLI transport ───────────────────────────────────────────────────────────
+  if (plugin.baseUrl.startsWith('cli://')) {
+    const command = parseCliCommand(plugin.baseUrl);
+    console.log(`[Plugin] ${pluginName}/${endpointName} → cli ${command} (method=${endpointName})`);
+    return callCli({ command, method: endpointName, params });
+  }
+
   // ── STDIO transport ─────────────────────────────────────────────────────────
   if (plugin.baseUrl.startsWith('stdio://')) {
     const { bin, args } = parseStdioCommand(plugin.baseUrl);
@@ -187,14 +256,26 @@ export async function callPlugin(pluginName, endpointName, params = {}) {
 
   // ── HTTP / socket transport ─────────────────────────────────────────────────
   const method = (endpoint.method || 'GET').toUpperCase();
-  const nonEmpty = Object.keys(params).length > 0;
 
+  // Substitute {param} path templates and collect remaining params
   let httpPath = endpoint.path;
+  const usedInPath = new Set();
+  for (const [k, v] of Object.entries(params)) {
+    if (httpPath.includes(`{${k}}`)) {
+      httpPath = httpPath.replace(`{${k}}`, encodeURIComponent(String(v)));
+      usedInPath.add(k);
+    }
+  }
+  const remainingParams = Object.fromEntries(Object.entries(params).filter(([k]) => !usedInPath.has(k)));
+
   let body;
-  if (method === 'GET' && nonEmpty) {
-    httpPath += '?' + new URLSearchParams(params).toString();
-  } else if (method !== 'GET' && nonEmpty) {
-    body = params;
+  if (method === 'GET') {
+    if (Object.keys(remainingParams).length > 0) {
+      httpPath += '?' + new URLSearchParams(remainingParams).toString();
+    }
+  } else {
+    // Always send a JSON body for non-GET requests (some servers reject bodyless POSTs)
+    body = Object.keys(remainingParams).length > 0 ? remainingParams : {};
   }
 
   console.log(`[Plugin] ${pluginName}/${endpointName} → ${method} ${plugin.baseUrl}${httpPath}`);
@@ -211,7 +292,8 @@ export function pluginSystemContext() {
   if (!enabled.length) return null;
 
   const lines = [
-    'You have access to external plugins. When the user asks for content a plugin can provide (e.g. play a podcast, fetch an episode), set "pluginCall" in your response and leave "play" empty.',
+    'You have access to external plugins.',
+    'IMPORTANT: When the user asks for news, headlines, briefings, podcasts, episodes, or ANYTHING a plugin can fetch — you MUST set "pluginCall" and leave "play" empty. Do NOT answer from memory. Do NOT make up content or URLs.',
     'You will receive the plugin result in the next turn and should then set "pluginAction" to decide what to do with it.',
     '',
     'Available plugins:',
@@ -221,17 +303,26 @@ export function pluginSystemContext() {
     lines.push(`\n### ${p.name}`);
     lines.push(p.description);
     lines.push('Endpoints:');
+    // If djEndpoints is set, only expose those endpoints to the DJ to keep the prompt concise
+    const allowedNames = p.djEndpoints?.length ? new Set(p.djEndpoints) : null;
     for (const [name, ep] of Object.entries(p.endpoints ?? {})) {
+      if (allowedNames && !allowedNames.has(name)) continue;
       const paramList = (ep.params ?? []).map(pr => `${pr.name}: ${pr.description}`).join(', ');
       lines.push(`  - ${name}(${paramList}): ${ep.description}`);
     }
   }
 
   lines.push('');
-  lines.push('pluginAction.type options:');
-  lines.push('  - "play"       → enqueue the audioUrl directly in the music player');
-  lines.push('  - "rest-piece" → save imageUrl + text as an art recommendation for the next break');
-  lines.push('  - "info"       → include the data in your "say" response (no media action)');
+  lines.push('pluginAction type — choose based on what the plugin returned:');
+  lines.push('  "play"       → plugin has audio (audio_url/audioUrl/url). Set audioUrl (copy verbatim). Set imageUrl if there is an image. Set play=[].');
+  lines.push('  "rest-piece" → plugin has an image + article/text but NO audio. Set imageUrl and text.');
+  lines.push('  "info"       → plugin returned only text/data. Summarize in say. No pluginAction needed.');
+  lines.push('');
+  lines.push('Field copy rules — always copy values exactly from the plugin result, never rewrite or shorten:');
+  lines.push('  audio_url / audioUrl / url  → pluginAction.audioUrl  (accepts file://, /absolute/path, or https://)');
+  lines.push('  image_url / imageUrl / image → pluginAction.imageUrl (may be a relative path — copy as-is, server resolves it)');
+  lines.push('  title                        → pluginAction.title');
+  lines.push('Always write a non-empty say — spoken intro for play, spoken summary for rest-piece or info.');
 
   return lines.join('\n');
 }

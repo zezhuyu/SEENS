@@ -13,6 +13,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
+import fs from 'fs';
+import path from 'path';
 
 const router = express.Router();
 const execFileAsync = promisify(execFile);
@@ -81,13 +83,52 @@ async function _resolve(videoId) {
   throw lastErr;
 }
 
+const AUDIO_MIME = { '.mp3':'audio/mpeg', '.m4a':'audio/mp4', '.aac':'audio/aac', '.wav':'audio/wav', '.ogg':'audio/ogg', '.opus':'audio/ogg; codecs=opus' };
+
+// GET /api/stream/local?path=... — serve a local file:// audio path over HTTP with Range support.
+router.get('/local', async (req, res) => {
+  const filePath = req.query.path ? decodeURIComponent(req.query.path) : null;
+  if (!filePath || !path.isAbsolute(filePath)) {
+    return res.status(400).json({ error: 'path query param required (absolute path)' });
+  }
+  let stat;
+  try { stat = await fs.promises.stat(filePath); } catch {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  const mime = AUDIO_MIME[path.extname(filePath).toLowerCase()] ?? 'audio/mpeg';
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (req.headers.range) {
+    const [s, e] = req.headers.range.replace(/bytes=/, '').split('-');
+    const start = parseInt(s, 10);
+    const end = e ? Math.min(parseInt(e, 10), stat.size - 1) : stat.size - 1;
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+    res.setHeader('Content-Length', end - start + 1);
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.status(200).setHeader('Content-Length', stat.size);
+    fs.createReadStream(filePath).pipe(res);
+  }
+});
+
 // GET /api/stream/proxy?url=... — proxy an external audio URL through the local server.
 // Used by plugin tracks so the browser audio element doesn't hit CORS restrictions.
 // Forwards Range headers so seekable playback works.
+// Also accepts file:// URLs — rewrites them to /api/stream/local internally.
 router.get('/proxy', async (req, res) => {
   const { url } = req.query;
+
+  // Redirect file:// URLs to the local file streaming endpoint
+  if (url?.startsWith('file://')) {
+    const filePath = decodeURIComponent(url.slice('file://'.length));
+    return res.redirect(302, `/api/stream/local?path=${encodeURIComponent(filePath)}`);
+  }
+
   if (!url || !/^https?:\/\//.test(url)) {
-    return res.status(400).json({ error: 'url query param required (http/https)' });
+    return res.status(400).json({ error: 'url query param required (http/https or file://)' });
   }
   const upstreamHeaders = {};
   if (req.headers.range) upstreamHeaders['Range'] = req.headers.range;
