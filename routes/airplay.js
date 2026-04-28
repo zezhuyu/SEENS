@@ -64,6 +64,7 @@ let nowPlaying    = null;  // { videoId, title, artist }
 let currentFfmpeg = null;  // ChildProcess
 let sysOrigDevice = null;  // macOS output before sys-select (restored on deselect)
 
+
 function requireAirTunes(res) {
   if (airtunes) return true;
   res.status(503).json({
@@ -119,12 +120,9 @@ router.get('/devices', (req, res) => {
   browser.on('up', svc => {
     // Strip MAC prefix (e.g. "AABBCC@Speaker Name" → "Speaker Name")
     const displayName = svc.name.replace(/^[0-9A-Fa-f]{12}@/, '');
-    found.set(svc.fqdn ?? svc.name, {
-      name:    displayName,
-      rawName: svc.name,
-      host:    svc.host,
-      port:    svc.port || 5000,
-    });
+    const entry = { name: displayName, rawName: svc.name, host: svc.host, port: svc.port || 5000 };
+    found.set(svc.fqdn ?? svc.name, entry);
+    apLog('info', `mDNS found: "${displayName}" host=${svc.host} port=${svc.port} fqdn=${svc.fqdn}`);
   });
 
   setTimeout(() => {
@@ -142,11 +140,11 @@ router.post('/select', async (req, res) => {
     await stopCurrent();
     activeDevice = null;
     nowPlaying   = null;
-    console.log('[AirPlay] Deselected');
+    apLog('info', 'Deselected — RAOP device cleared');
     return res.json({ ok: true, active: null });
   }
   activeDevice = { name: name ?? host, host, port: port || 5000 };
-  console.log(`[AirPlay] Selected: "${activeDevice.name}" @ ${host}:${activeDevice.port}`);
+  apLog('info', `RAOP selected: "${activeDevice.name}" @ ${host}:${activeDevice.port}`);
   res.json({ ok: true, active: activeDevice.name });
 });
 
@@ -158,54 +156,60 @@ router.post('/play', async (req, res) => {
   const { videoId, streamUrl, title, artist } = req.body ?? {};
   if (!videoId && !streamUrl) return res.status(400).json({ error: 'videoId or streamUrl required' });
 
-  console.log(`[AirPlay] play request: "${title ?? videoId ?? streamUrl}" on ${activeDevice.host}:${activeDevice.port}`);
+  apLog('info', `/play "${title ?? 'untitled'}" videoId=${videoId ?? 'none'} streamUrl=${streamUrl ? streamUrl.slice(0,80) : 'none'} → ${activeDevice.name} (${activeDevice.host}:${activeDevice.port})`);
 
   let audioUrl;
   if (streamUrl) {
     audioUrl = streamUrl;
+    apLog('info', `using provided streamUrl: ${audioUrl.slice(0, 100)}`);
   } else {
+    apLog('info', `resolving videoId=${videoId} via yt-dlp…`);
     try {
       audioUrl = await getAudioUrl(videoId);
+      apLog('info', `resolved audio URL: ${audioUrl.slice(0, 100)}`);
     } catch (err) {
+      apLog('error', `getAudioUrl failed: ${err.message}`);
       return res.status(502).json({ error: `Could not resolve audio: ${err.message}` });
     }
   }
 
   try {
+    apLog('info', 'stopping any current RAOP stream…');
     await stopCurrent();
 
-    // Start RAOP handshake and wait for 'ready' before feeding audio.
-    // syncAudio() runs from module load so RTP seqs advance continuously — starting
-    // ffmpeg only after ready ensures the speaker receives audio at the right sequence.
+    apLog('info', `airtunes.add(${activeDevice.host}, port=${activeDevice.port}, volume=50)`);
     const device = airtunes.add(activeDevice.host, { port: activeDevice.port, volume: 50 });
 
-    // Capture the low-level RTSP failure reason for clear diagnostics.
-    // rtsp 'end' fires (with the specific error string) before device 'status' fires,
-    // so rtspError will be populated when we check raopStatus.
     let rtspError = null;
     device.rtsp.once('end', (err, detail) => {
-      rtspError = err + (detail ? ` (${detail})` : '');
-      console.log(`[AirPlay] RTSP end: ${rtspError}`);
+      rtspError = String(err) + (detail ? ` (${detail})` : '');
+      apLog('warn', `RTSP ended: ${rtspError}`);
     });
+    device.rtsp.once('connect', () => apLog('info', 'RTSP TCP connected'));
+    device.rtsp.once('response', (method, status) => apLog('info', `RTSP response: ${method} → HTTP ${status}`));
 
+    apLog('info', 'waiting for RAOP handshake (10s timeout)…');
     const raopStatus = await new Promise(resolve => {
-      const t = setTimeout(() => resolve('timeout'), 10_000);
+      const t = setTimeout(() => {
+        apLog('warn', 'RAOP handshake timed out after 10s');
+        resolve('timeout');
+      }, 10_000);
       device.once('status', (status, desc) => {
         clearTimeout(t);
-        console.log(`[AirPlay] RAOP status: ${status}${desc ? ' — ' + desc : ''}`);
+        apLog('info', `RAOP status: ${status}${desc ? ' — ' + desc : ''}`);
         resolve(status);
       });
     });
 
     if (raopStatus !== 'ready') {
       const errDetail = rtspError || raopStatus;
-      console.log(`[AirPlay] Handshake failed: ${errDetail}`);
+      apLog('error', `RAOP handshake failed: ${errDetail}`);
       return res.status(502).json({ error: `RAOP handshake failed: ${errDetail}` });
     }
 
-    // Spawn ffmpeg — no -re flag so it fills the buffer immediately
-    currentFfmpeg = spawn(FFMPEG, [
-      '-loglevel', 'error',
+    apLog('info', `RAOP ready — spawning ffmpeg: ${FFMPEG}`);
+    const ffArgs = [
+      '-loglevel', 'warning',
       '-i', audioUrl,
       '-vn',
       '-acodec', 'pcm_s16be',
@@ -213,27 +217,45 @@ router.post('/play', async (req, res) => {
       '-ac', '2',
       '-f', 's16be',
       'pipe:1',
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    ];
+    apLog('info', `ffmpeg args: ${ffArgs.join(' ')}`);
+    currentFfmpeg = spawn(FFMPEG, ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    currentFfmpeg.stdout.on('data', chunk => airtunes.write(chunk));
-    currentFfmpeg.stdout.on('end',  ()    => { try { airtunes.end(); } catch {} });
+    let ffmpegStarted = false;
+    currentFfmpeg.stdout.on('data', chunk => {
+      if (!ffmpegStarted) { ffmpegStarted = true; apLog('info', 'ffmpeg producing audio data — piping to airtunes'); }
+      airtunes.write(chunk);
+    });
+    currentFfmpeg.stdout.on('end', () => {
+      apLog('info', 'ffmpeg stdout ended — calling airtunes.end()');
+      try { airtunes.end(); } catch {}
+    });
 
+    let ffmpegStderr = '';
     currentFfmpeg.stderr.on('data', d => {
       const msg = d.toString().trim();
-      if (msg) console.warn('[AirPlay] ffmpeg:', msg);
+      if (msg) {
+        ffmpegStderr += msg + '\n';
+        apLog('warn', `ffmpeg stderr: ${msg}`);
+      }
+    });
+
+    currentFfmpeg.on('error', err => {
+      apLog('error', `ffmpeg process error: ${err.message}`);
     });
 
     currentFfmpeg.on('exit', (code, signal) => {
-      console.log(`[AirPlay] ffmpeg exited (${signal ?? code}) for "${title ?? videoId}"`);
+      apLog('info', `ffmpeg exited code=${code} signal=${signal} for "${title ?? videoId}"`);
+      if (code !== 0 && ffmpegStderr) apLog('warn', `ffmpeg stderr dump: ${ffmpegStderr.slice(0, 500)}`);
       currentFfmpeg = null;
     });
 
     nowPlaying = { videoId, title, artist };
-    console.log(`[AirPlay] Streaming "${title ?? videoId}" → ${activeDevice.name} (${activeDevice.host}:${activeDevice.port})`);
+    apLog('info', `Streaming started: "${title ?? videoId}" → ${activeDevice.name}`);
     res.json({ ok: true, device: activeDevice.name });
 
   } catch (err) {
-    console.error('[AirPlay] Play error:', err.message);
+    apLog('error', `Play error: ${err.message}\n${err.stack}`);
     res.status(500).json({ error: err.message });
   }
 });

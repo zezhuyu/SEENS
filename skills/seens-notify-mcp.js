@@ -14,6 +14,8 @@
  */
 
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
 
 // ── Tool definition ────────────────────────────────────────────────────────────
 
@@ -54,19 +56,41 @@ const NOTIFY_TOOL = {
 // ── Port detection ─────────────────────────────────────────────────────────────
 
 async function detectPort() {
+  const envFilePort = readPortFromDotEnv();
   const candidates = [
     process.env.PORT,
     process.env.SEENS_PORT,
-    '8080',
+    envFilePort,
     '7477',
-    '3000',
-    '3001',
   ].filter(Boolean);
 
   for (const port of candidates) {
     if (await portLive(Number(port))) return Number(port);
   }
   return 7477;
+}
+
+function readPortFromDotEnv() {
+  try {
+    const envPath = findNearestDotEnv(process.cwd());
+    if (!envPath) return null;
+    const text = fs.readFileSync(envPath, 'utf8');
+    const match = text.match(/^\s*PORT\s*=\s*["']?(\d{2,5})["']?\s*$/m);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function findNearestDotEnv(startDir) {
+  let dir = path.resolve(startDir);
+  while (true) {
+    const candidate = path.join(dir, '.env');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 function portLive(port) {
