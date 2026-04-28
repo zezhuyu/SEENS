@@ -271,31 +271,36 @@ export function getTodaySuggestions() {
   `).all();
 }
 
-// Suggestions from the last N days (excluding today) — treat as firm block to prevent near-term repeats
+// Suggestions before the current session, going back N days — hard block to prevent cross-session repeats.
+// Uses session.started_at as the cutoff so same-day earlier sessions are also covered.
 export function getRecentCrossSessionSuggestions(days = 7, limit = 300) {
+  const sessionStart = parseInt(getPref('session.started_at', '0')) || Math.floor(Date.now() / 1000);
+  const cutoff = sessionStart - days * 86400;
   return db.prepare(`
     SELECT title, artist FROM (
       SELECT title, artist, MAX(suggested_at) AS last
       FROM suggestions
-      WHERE date(suggested_at, 'unixepoch', 'localtime') < date('now', 'localtime')
-        AND date(suggested_at, 'unixepoch', 'localtime') >= date('now', 'localtime', ? || ' days')
+      WHERE suggested_at < ?
+        AND suggested_at >= ?
       GROUP BY lower(title), lower(artist)
       ORDER BY last DESC
     ) LIMIT ?
-  `).all(`-${days}`, limit);
+  `).all(sessionStart, cutoff, limit);
 }
 
-// Suggestions older than N days — softer signal, just for style awareness
+// Suggestions older than 7 days before the current session — softer signal, style awareness only
 export function getCrossSessionSuggestions(limit = 75) {
+  const sessionStart = parseInt(getPref('session.started_at', '0')) || Math.floor(Date.now() / 1000);
+  const cutoff = sessionStart - 7 * 86400;
   return db.prepare(`
     SELECT title, artist FROM (
       SELECT title, artist, MAX(suggested_at) AS last
       FROM suggestions
-      WHERE date(suggested_at, 'unixepoch', 'localtime') < date('now', 'localtime', '-7 days')
+      WHERE suggested_at < ?
       GROUP BY lower(title), lower(artist)
       ORDER BY last DESC
     ) LIMIT ?
-  `).all(limit);
+  `).all(cutoff, limit);
 }
 
 // Feedback aggregated by artist — stronger signal than per-track lists
