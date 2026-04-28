@@ -2097,7 +2097,21 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     });
   }, []);
 
-  const skipNext = useCallback(async () => {
+  const skipNext = useCallback(async (isUserInitiated = false) => {
+    // Record a skip signal when the user manually skips a playing track
+    if (isUserInitiated && currentTrack && playingRef.current) {
+      const t = currentTrack;
+      fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoId: t.videoId ?? t.video_id ?? null,
+          title:   t.resolvedTitle  ?? t.title,
+          artist:  t.resolvedArtist ?? t.artist ?? '',
+          rating:  'skip',
+        }),
+      }).catch(() => {});
+    }
     // Don't pause when AirPlay is active — a pause + async-fetch gap causes the
     // AirPlay receiver to drop the session. The src change in playTrack will
     // stop the current audio naturally.
@@ -2323,7 +2337,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         else if (msg.type === 'command') {
           if (msg.action === 'pause') audioRef.current.pause();
           else if (msg.action === 'resume') audioRef.current.play().catch(()=>{});
-          else if (msg.action === 'next') skipNextRef.current();
+          else if (msg.action === 'next') skipNextRef.current(true);
         }
         else if (msg.type === 'notification') {
           setNotifications(prev => [msg, ...prev].slice(0, 50));
@@ -2710,7 +2724,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
             </div>
           )}
           <div className="transport">
-            <button className="tr-btn" onClick={() => skipNextRef.current()} aria-label="Previous"><Icon.Prev/></button>
+            <button className="tr-btn" onClick={() => skipNextRef.current(true)} aria-label="Previous"><Icon.Prev/></button>
             <button className="tr-btn play" onClick={() => {
               if (playing) audioRef.current.pause();
               else if (audioRef.current.src) audioRef.current.play().catch(()=>{});
@@ -2718,7 +2732,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
             }} aria-label="Play/Pause">
               {playing ? <Icon.Pause/> : <Icon.Play/>}
             </button>
-            <button className="tr-btn" onClick={() => skipNextRef.current()} aria-label="Next"><Icon.Next/></button>
+            <button className="tr-btn" onClick={() => skipNextRef.current(true)} aria-label="Next"><Icon.Next/></button>
           </div>
         </div>
         <div className="progress" onClick={e => {

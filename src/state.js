@@ -82,6 +82,15 @@ db.exec(`
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     UNIQUE(title, artist)
   );
+
+  -- Tracks the user manually skipped (next/prev button while playing)
+  CREATE TABLE IF NOT EXISTS skips (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id   TEXT,
+    title      TEXT NOT NULL,
+    artist     TEXT NOT NULL DEFAULT '',
+    skipped_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `);
 
 // ─── Migrations ───────────────────────────────────────────────────────────────
@@ -113,10 +122,24 @@ export function getRecentMessages(limit = 10) {
   return db.prepare('SELECT role, content FROM messages ORDER BY id DESC LIMIT ?').all(limit).reverse();
 }
 
+const SESSION_MOODS  = ['nostalgic','energetic','dreamy','melancholic','uplifting','introspective','euphoric','raw'];
+const SESSION_LENSES = ['deep cut','B-side','underrated gem','recent release','live version era','debut album feel'];
+
 // Mark the start of a new listening session (recorded as unix epoch in prefs)
 export function setSessionStart() {
+  const now = new Date();
   setPref('session.started_at', String(Math.floor(Date.now() / 1000)));
-  setPref('session.context', ''); // fresh context for each session
+  setPref('session.context', '');
+  // Pick a mood seed once per session so recommendations stay tonally consistent.
+  setPref('session.mood_seed', SESSION_MOODS[now.getMinutes() % SESSION_MOODS.length]);
+  setPref('session.mood_lens', SESSION_LENSES[Math.floor(now.getSeconds() / 10) % SESSION_LENSES.length]);
+}
+
+export function getSessionMood() {
+  return {
+    seed: getPref('session.mood_seed') || SESSION_MOODS[new Date().getMinutes() % SESSION_MOODS.length],
+    lens: getPref('session.mood_lens') || SESSION_LENSES[Math.floor(new Date().getSeconds() / 10) % SESSION_LENSES.length],
+  };
 }
 
 // DJ-extracted summary of what the user is doing / their mood for this session
@@ -304,6 +327,7 @@ export function getCrossSessionSuggestions(limit = 75) {
 }
 
 // Feedback aggregated by artist — stronger signal than per-track lists
+// Includes skip counts as a soft-negative signal alongside explicit dislikes
 export function getArtistFeedback() {
   return db.prepare(`
     SELECT
@@ -315,6 +339,23 @@ export function getArtistFeedback() {
     GROUP BY lower(trim(artist))
     ORDER BY likes DESC, dislikes DESC
   `).all();
+}
+
+export function recordSkip({ videoId, title, artist }) {
+  db.prepare('INSERT INTO skips (video_id, title, artist) VALUES (?, ?, ?)')
+    .run(videoId ?? null, title, artist ?? '');
+}
+
+// Most-skipped tracks recently — strong signal to avoid similar music
+export function getRecentSkips(limit = 30) {
+  return db.prepare(`
+    SELECT title, artist, COUNT(*) AS skip_count
+    FROM skips
+    WHERE skipped_at >= unixepoch() - 7 * 86400
+    GROUP BY lower(title), lower(artist)
+    ORDER BY skip_count DESC
+    LIMIT ?
+  `).all(limit);
 }
 
 // ─── Feedback ─────────────────────────────────────────────────────────────────

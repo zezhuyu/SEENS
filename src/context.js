@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getSessionMessages, getRecentPlays, peekNext, getQueueTracks, getPref, getSessionSuggestions, getRecentCrossSessionSuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback, getSessionContext } from './state.js';
+import { getSessionMessages, getRecentPlays, peekNext, getQueueTracks, getPref, getSessionSuggestions, getRecentCrossSessionSuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback, getRecentSkips, getSessionMood, getSessionContext } from './state.js';
 import { getWeatherContext } from './weather.js';
 import { getLocation } from './location.js';
 import { readUserFile, readUserJSON } from './paths.js';
@@ -54,10 +54,8 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
 
   // Fragment 3 — Environment (time, day, season, variety seed)
   const now = new Date();
-  const MOODS  = ['nostalgic','energetic','dreamy','melancholic','uplifting','introspective','euphoric','raw'];
-  const LENSES = ['deep cut','B-side','underrated gem','recent release','live version era','debut album feel'];
-  const seed   = MOODS[now.getMinutes() % MOODS.length];
-  const lens   = LENSES[Math.floor(now.getSeconds() / 10) % LENSES.length];
+  // Seed is fixed for the whole session so recommendations stay tonally consistent.
+  const { seed, lens } = getSessionMood();
   const userLocation = getLocation();
   const envParts = [
     `Current time: ${now.toLocaleString('en-US', { weekday: 'long', hour: '2-digit', minute: '2-digit' })}`,
@@ -131,9 +129,10 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
       : '',
   ].filter(Boolean).join('\n\n');
 
-  // Fragment 5c — User feedback: artist-level aggregation + per-track signals
+  // Fragment 5c — User feedback: artist-level aggregation + per-track signals + skips
   const trackFeedback   = getRecentFeedback(40);
   const artistFeedback  = getArtistFeedback();
+  const recentSkips     = getRecentSkips(30);
   const likedArtists    = artistFeedback.filter(a => a.likes > 0);
   const dislikedArtists = artistFeedback.filter(a => a.dislikes > 0);
   const likedTracks     = trackFeedback.filter(f => f.rating === 'like');
@@ -150,6 +149,9 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
       : '',
     dislikedTracks.length
       ? `Individual tracks to avoid:\n${dislikedTracks.map(f => `- "${f.title}"${f.artist ? ` by ${f.artist}` : ''}`).join('\n')}`
+      : '',
+    recentSkips.length
+      ? `Tracks the user skipped (did not want to hear) — avoid these AND songs with a similar sound/energy/genre:\n${recentSkips.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}${s.skip_count > 1 ? ` (skipped ${s.skip_count}×)` : ''}`).join('\n')}`
       : '',
   ].filter(Boolean);
   const feedbackSummary = feedbackParts.join('\n\n');
