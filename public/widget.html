@@ -2236,17 +2236,28 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         setDjMessages(prev => [...prev, { from:'dj', text:msg.say, time:fmtClock(new Date()) }]);
       }
       if (msg.agent) setDjAgent(msg.agent);
-      if (msg.play?.length) {
-        setQueue(msg.play.map((t, i) => ({
-          title: t.resolvedTitle ?? t.title,
-          artist: t.resolvedArtist ?? t.artist ?? '',
-          now: i === 0,
-        })));
-      }
       const audio = audioRef.current;
       const audioActive = playingRef.current || ttsPlayingRef.current || (audio.src && !audio.ended && !audio.error);
       const userAsked = msg.trigger === 'user-chat';
       const intent = msg.playIntent ?? (userAsked ? 'now' : 'end');
+
+      // Update queue display only after intent is known:
+      // - intent=now: replace entire queue, first track is the new "now playing"
+      // - intent=next/end: fetch fresh queue from server so we don't falsely mark a queued
+      //   track as "now" while the current song is still playing
+      if (msg.play?.length) {
+        if (intent === 'now') {
+          setQueue(msg.play.map((t, i) => ({
+            title: t.resolvedTitle ?? t.title,
+            artist: t.resolvedArtist ?? t.artist ?? '',
+            now: i === 0,
+          })));
+        } else {
+          fetch('/api/now?full=1').then(r => r.json()).then(({ queue: q }) => {
+            if (q?.length) setQueue(q.map((t, i) => ({ ...t, now: i === 0 })));
+          }).catch(() => {});
+        }
+      }
 
       // If we're waiting for the user-chat cold-start response, ignore scheduler responses
       if (userChatPendingRef.current && !userAsked) return;
