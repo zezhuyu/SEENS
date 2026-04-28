@@ -33,16 +33,28 @@ const MCP_SRC = path.join(ROOT, 'skills', 'seens-notify-mcp.js');
 
 const COMPLETION_BLOCK_START = '<!-- seens-notify:completion:start -->';
 const COMPLETION_BLOCK_END = '<!-- seens-notify:completion:end -->';
-const COMPLETION_BLOCK = `${COMPLETION_BLOCK_START}
+function buildCompletionBlock(toolName) {
+  return `${COMPLETION_BLOCK_START}
 ## SEENS completion notification
 
-When a task is finished (success, failure, or blocked), call \`mcp__seens_notify__notify\` once with:
+When a task is finished (success, failure, or blocked), call \`${toolName}\` once with:
 - \`title\`: short completion headline
 - \`message\`: concise result + key blocker/next step
 - \`type\`: \`success\` | \`error\` | \`warning\` | \`info\`
 
 If the MCP tool is unavailable, fall back to curl POST \`/api/notify\` on localhost.
 ${COMPLETION_BLOCK_END}`;
+}
+
+const PERMISSION_BLOCK_START = '<!-- seens-notify:permission:start -->';
+const PERMISSION_BLOCK_END = '<!-- seens-notify:permission:end -->';
+const PERMISSION_BLOCK = `${PERMISSION_BLOCK_START}
+## User permission before sensitive commands
+
+Before running a command that is potentially destructive, writes outside the workspace, uses the network, opens GUI apps, or otherwise requires elevated approval, stop and require explicit user permission through the harness approval flow.
+
+Do not try to work around approval requirements. Prefer safe read-only inspection first, then request approval only for the specific command that needs it.
+${PERMISSION_BLOCK_END}`;
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
@@ -66,22 +78,32 @@ function copyFile(src, dest) {
   fs.copyFileSync(src, dest);
 }
 
-function setCompletionDirective(file) {
+function upsertNamedBlock(file, startMarker, endMarker, block) {
   const current = readTextOrEmpty(file);
   const blockRegex = new RegExp(
-    `${COMPLETION_BLOCK_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${COMPLETION_BLOCK_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`
+    `${startMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${endMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`
   );
 
   let next;
   if (!current.trim()) {
-    next = `${COMPLETION_BLOCK}\n`;
+    next = `${block}\n`;
   } else if (blockRegex.test(current)) {
-    next = current.replace(blockRegex, COMPLETION_BLOCK);
+    next = current.replace(blockRegex, block);
   } else {
-    next = `${current.replace(/\s*$/, '')}\n\n${COMPLETION_BLOCK}\n`;
+    next = `${current.replace(/\s*$/, '')}\n\n${block}\n`;
   }
 
   writeText(file, next);
+}
+
+function setInstructionDirectives(file, completionToolName) {
+  upsertNamedBlock(
+    file,
+    COMPLETION_BLOCK_START,
+    COMPLETION_BLOCK_END,
+    buildCompletionBlock(completionToolName)
+  );
+  upsertNamedBlock(file, PERMISSION_BLOCK_START, PERMISSION_BLOCK_END, PERMISSION_BLOCK);
 }
 
 function buildCodexSkillMarkdown() {
@@ -122,7 +144,7 @@ function installClaude() {
   writeText(claudeSettingsPath, JSON.stringify(settings, null, 2) + '\n');
 
   // Add completion directive
-  setCompletionDirective(claudeInstructionsPath);
+  setInstructionDirectives(claudeInstructionsPath, 'mcp__seens-notify__notify');
 
   console.log(`✓ Claude skill installed: ${claudeSkillDest}`);
   console.log(`✓ Claude slash command installed: ${claudeCommandDest}`);
@@ -165,7 +187,7 @@ function installCodex() {
   writeText(codexSkillDest, buildCodexSkillMarkdown());
   copyFile(MCP_SRC, codexMcpDest);
   upsertCodexMcpServer(codexConfigPath, codexMcpDest);
-  setCompletionDirective(codexAgentsPath);
+  setInstructionDirectives(codexAgentsPath, 'mcp__seens_notify__notify');
 
   console.log(`✓ Codex skill installed: ${codexSkillDest}`);
   console.log(`✓ Codex MCP server installed: ${codexMcpDest}`);
