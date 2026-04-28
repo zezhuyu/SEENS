@@ -327,7 +327,14 @@ export async function handleInput(input, triggerType = 'user-chat') {
     console.warn(`[Router:${triggerType}] recordSuggestions failed:`, err.message);
   }
 
-  const firstTrack = resolvedTracks[0] ?? null;
+  // The first PLAYABLE track — may differ from resolvedTracks[0] if YouTube failed for track[0].
+  // The frontend auto-skips tracks with no streamUrl, so the DJ must announce what will actually play.
+  const firstPlayable = resolvedTracks.find(t => t.streamUrl || t.videoId) ?? resolvedTracks[0] ?? null;
+  const firstTrack = firstPlayable;
+
+  if (resolvedTracks[0] && firstPlayable && firstPlayable !== resolvedTracks[0]) {
+    console.log(`[Router:${triggerType}] ${ts()} play[0] unresolvable — firstTrack shifted to "${firstPlayable.resolvedTitle ?? firstPlayable.title}"`);
+  }
 
   // Detect and fix AI say/track mismatch (AI hallucinated a different song in say).
   // Skip for plugin tracks — the DJ intro doesn't need to literally contain the episode title.
@@ -336,14 +343,18 @@ export async function handleInput(input, triggerType = 'user-chat') {
 
   if (firstTrack && finalSay && firstTrack.source !== 'plugin') {
     const title = (firstTrack.resolvedTitle ?? firstTrack.title ?? '').toLowerCase();
-    if (title && !finalSay.toLowerCase().includes(title)) {
+    // Only correct when say explicitly names a different song — not when it's a vibe/story intro.
+    // Heuristic: say is a mismatch if it contains none of the firstTrack title words AND is short
+    // (likely a bare re-announcement of a wrong track), OR if it directly names a recently played song.
+    const sayLower = finalSay.toLowerCase();
+    const titleWords = title.split(/\s+/).filter(w => w.length > 3);
+    const titleMissing = titleWords.length > 0 && !titleWords.some(w => sayLower.includes(w));
+    const isShortBare = finalSay.length < 60 && titleMissing;  // bare "Song by Artist" style wrong announcement
+    if (isShortBare) {
       const displayTitle  = firstTrack.resolvedTitle  ?? firstTrack.title;
       const displayArtist = firstTrack.resolvedArtist ?? firstTrack.artist ?? '';
-      // The DJ hallucinated a different song in say — discard the mismatched description
-      // and just announce the actual track cleanly to avoid confusing the listener
       finalSay = displayArtist ? `${displayTitle} by ${displayArtist}` : displayTitle;
       console.log(`[Router:${triggerType}] ${ts()} say mismatch — replaced with actual track: "${finalSay}"`);
-      // Re-synthesize (discard parallel TTS result which was for the hallucinated say)
       const corrected = await synthesize(finalSay).catch(err => {
         console.warn(`[Router:${triggerType}] TTS re-synth error:`, err.message);
         return null;
