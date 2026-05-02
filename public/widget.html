@@ -1346,7 +1346,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
           {plugins.map(p => (
             <div key={p.name} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
               <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:12, fontWeight:600, color:'var(--ink-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
+                <div style={{ fontSize:12, fontWeight:600, color:'var(--ink-3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
                 {p.baseUrl && <div style={{ fontSize:10, color:'var(--ink-3)', fontFamily:'var(--font-mono)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.baseUrl}</div>}
               </div>
               <label style={{ display:'flex', alignItems:'center', gap:4, cursor:'pointer', flexShrink:0 }}>
@@ -2247,13 +2247,27 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 
       if (msg.say) {
         setDjText(msg.say);
-        setDjMessages(prev => [...prev, { from:'dj', text:msg.say, time:fmtClock(new Date()) }]);
+        // Interim (plugin loading) messages show in the banner only — the real response
+        // follows and adds itself to chat history. Keeps the conversation log clean.
+        if (!msg.interim) {
+          setDjMessages(prev => [...prev, { from:'dj', text:msg.say, time:fmtClock(new Date()) }]);
+        }
       }
       if (msg.agent) setDjAgent(msg.agent);
       const audio = audioRef.current;
       const audioActive = playingRef.current || ttsPlayingRef.current || (audio.src && !audio.ended && !audio.error);
       const userAsked = msg.trigger === 'user-chat';
       const intent = msg.playIntent ?? (userAsked ? 'now' : 'end');
+
+      // When a plugin is loading for a user request, block the near-end transition so
+      // another track doesn't start playing while we're waiting for the plugin result.
+      if (msg.interim && userAsked && !pendingIntroTTSRef.current) {
+        pendingIntroTTSRef.current = 'plugin-loading';
+      }
+      // Real response arriving — clear the plugin-loading placeholder if it's still set
+      if (!msg.interim && pendingIntroTTSRef.current === 'plugin-loading') {
+        pendingIntroTTSRef.current = null;
+      }
 
       // Update queue display only after intent is known:
       // - intent=now: replace entire queue, first track is the new "now playing"

@@ -1,7 +1,7 @@
 import { generate, getActiveAgent } from './ai/index.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
-import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setSessionContext, setSessionStart } from './state.js';
+import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setPref, setSessionContext, setSessionStart } from './state.js';
 import { broadcast } from './ws-broadcast.js';
 import { resolveTracksOrdered } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
@@ -47,12 +47,18 @@ export async function handleInput(input, triggerType = 'user-chat') {
   const t0 = Date.now();
   const ts = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
 
-  // Ensure a session epoch exists so session-level suggestion dedup always works.
-  // Without this, getSessionSuggestions() falls back to today's suggestions only.
-  if (!parseInt(getPref('session.started_at', '0'))) {
+  // Session lifecycle: start a new session if none exists, or if the last activity
+  // was more than 3 hours ago (user came back after a break = fresh dedup slate).
+  const SESSION_EXPIRY = 3 * 3600;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const startedAt = parseInt(getPref('session.started_at', '0')) || 0;
+  const lastActivity = parseInt(getPref('session.last_activity', '0')) || 0;
+  const sessionExpired = startedAt > 0 && lastActivity > 0 && (nowSec - lastActivity) > SESSION_EXPIRY;
+  if (!startedAt || sessionExpired) {
     setSessionStart();
-    console.log(`[Router] Auto-started new session`);
+    console.log(`[Router] ${sessionExpired ? 'Session expired — resetting' : 'New session started'}`);
   }
+  setPref('session.last_activity', String(nowSec));
 
   // AI-powered response
   addMessage('user', trimmed);

@@ -341,6 +341,19 @@ export function getArtistFeedback() {
   `).all();
 }
 
+// ─── Rest Pieces ──────────────────────────────────────────────────────────────
+// Rolling list of recently shown rest pieces stored in prefs as JSON.
+export function recordRestPiece({ title, artist, cat }) {
+  let recent = [];
+  try { recent = JSON.parse(getPref('rest.recent_pieces', '[]')); } catch {}
+  recent.push({ title, artist, cat });
+  setPref('rest.recent_pieces', JSON.stringify(recent.slice(-30))); // keep last 30
+}
+
+export function getRecentRestPieces() {
+  try { return JSON.parse(getPref('rest.recent_pieces', '[]')); } catch { return []; }
+}
+
 export function recordSkip({ videoId, title, artist }) {
   db.prepare('INSERT INTO skips (video_id, title, artist) VALUES (?, ?, ?)')
     .run(videoId ?? null, title, artist ?? '');

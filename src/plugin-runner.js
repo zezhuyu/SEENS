@@ -293,7 +293,11 @@ export function pluginSystemContext() {
 
   const lines = [
     'You have access to external plugins.',
-    'IMPORTANT: When the user asks for news, headlines, briefings, podcasts, episodes, or ANYTHING a plugin can fetch — you MUST set "pluginCall" and leave "play" empty. Do NOT answer from memory. Do NOT make up content or URLs.',
+    'IMPORTANT: For any of the categories below, you MUST issue a "pluginCall" and leave "play" empty. Do NOT answer from memory, do not fabricate data, do not guess URLs.',
+    '  • News, headlines, today\'s news, current events, daily briefing, podcast, episode → use briefcast plugin',
+    '  • Market insight, market conditions, stocks, portfolio, investment research, financial data, daily market briefing, investment radar, wealth → use aegis-wealth plugin',
+    '  • Any real-time or today\'s information that a connected plugin can provide',
+    'When in doubt whether to use a plugin: if the data could have changed since yesterday, use the plugin.',
     'You will receive the plugin result in the next turn and should then set "pluginAction" to decide what to do with it.',
     '',
     'Available plugins:',
