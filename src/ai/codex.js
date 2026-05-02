@@ -1,11 +1,12 @@
 /**
- * OpenAI adapter — calls the API directly using OPENAI_API_KEY.
- * Much faster than `codex exec` which has oh-my-codex orchestration overhead.
+ * Local Codex agent adapter — routes through the aegis-wealth local server
+ * instead of calling the remote OpenAI API directly.
  *
- * Model default: gpt-4o-mini (~2s, cheap)
- * Override: CODEX_MODEL=gpt-4o in .env for better quality
+ * Endpoint: LOCAL_CODEX_URL (default: http://100.77.249.102:8765/api/chat)
+ * Model override: CODEX_MODEL env var (passed to the local agent as a hint)
  */
 
+const LOCAL_CODEX_URL = process.env.LOCAL_CODEX_URL ?? 'http://100.77.249.102:8765/api/chat';
 const CODEX_MODEL = process.env.CODEX_MODEL ?? 'gpt-4o-mini';
 
 const JSON_INSTRUCTION = `
@@ -33,36 +34,26 @@ Always populate say with a spoken intro or summary.`;
 
 // Returns: { say, play: [{title, artist, source}], reason, segue }
 export async function generate(systemPrompt, userMessage) {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('OPENAI_API_KEY not set in .env');
+  const fullMessage = `${systemPrompt}\n${JSON_INSTRUCTION}\n\n---\nUser: ${userMessage}`;
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await fetch(LOCAL_CODEX_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${key}`,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: CODEX_MODEL,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: systemPrompt + '\n' + JSON_INSTRUCTION },
-        { role: 'user',   content: userMessage },
-      ],
-      max_tokens: 1500,
-      temperature: 1.1,
+      message: fullMessage,
+      agent:   'codex',
+      model:   CODEX_MODEL,
     }),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`OpenAI API ${res.status}: ${err.slice(0, 200)}`);
+    throw new Error(`Local Codex ${res.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await res.json();
-  const choice = data.choices?.[0];
-  const text = choice?.message?.content ?? '';
-  console.log(`[Codex] finish_reason=${choice?.finish_reason} tokens=${JSON.stringify(data.usage)}`);
+  const text = data.content ?? data.message ?? data.text ?? data.choices?.[0]?.message?.content ?? '';
+  console.log(`[Codex] url=${LOCAL_CODEX_URL} model=${CODEX_MODEL}`);
   console.log(`[Codex] raw response (first 400): ${text.slice(0, 400)}`);
   return parseOutput(text);
 }
