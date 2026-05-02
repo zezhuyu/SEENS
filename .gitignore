@@ -8,3 +8,5 @@ tts-cache/
 dist/
 .claude/
 USER/
+AGENTS.md
+CLAUDE.md

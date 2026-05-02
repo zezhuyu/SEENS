@@ -670,6 +670,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [moodRulesDraft, setMoodRulesDraft]         = useState('');
   const [tasteDraft, setTasteDraft]                 = useState('');
   const [locationDraft, setLocationDraft]           = useState('');
+  const [codexUrlDraft, setCodexUrlDraft]           = useState('');
   const [plugins, setPlugins]                       = useState([]);
   const [addingPlugin, setAddingPlugin]             = useState(false);
   const [newPlugin, setNewPlugin]                   = useState({ name:'', description:'', baseUrl:'' });
@@ -718,6 +719,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       setMoodRulesDraft(moodRes.status === 'fulfilled' ? (moodRes.value.content ?? '') : '');
       setTasteDraft(tasteRes.status === 'fulfilled' ? (tasteRes.value.content ?? '') : '');
       setLocationDraft(settings.location ?? '');
+      setCodexUrlDraft(settings.codexUrl ?? 'http://localhost:8765/api/chat');
       setPlugins(pluginsRes.status === 'fulfilled' ? pluginsRes.value : []);
       setMusicConnectors(connectorsRes.status === 'fulfilled' ? connectorsRes.value : []);
       setApiKeys(envKeysRes.status === 'fulfilled' ? envKeysRes.value : {});
@@ -1128,6 +1130,16 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               ))}
             </div>
           </div>
+          {s.agent === 'codex' && (
+            <div className="settings-row" style={{ flexDirection:'column', alignItems:'flex-start', gap:4 }}>
+              <div className="settings-row-label">Codex server URL</div>
+              <input className="settings-input full" type="text"
+                value={codexUrlDraft}
+                onChange={e => setCodexUrlDraft(e.target.value)}
+                onBlur={() => fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ codexUrl: codexUrlDraft }) })}
+                placeholder="http://localhost:8765/api/chat" />
+            </div>
+          )}
           <div className="settings-row">
             <div className="settings-row-label">DJ Voice</div>
             <select className="settings-select" value={currentVoice}

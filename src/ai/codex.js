@@ -1,13 +1,17 @@
 /**
- * Local Codex agent adapter — routes through the aegis-wealth local server
- * instead of calling the remote OpenAI API directly.
+ * Local Codex agent adapter — routes through a local server.
  *
- * Endpoint: LOCAL_CODEX_URL (default: http://100.77.249.102:8765/api/chat)
+ * URL: codex.url pref (set via settings UI) → LOCAL_CODEX_URL env var → localhost default
  * Model override: CODEX_MODEL env var (passed to the local agent as a hint)
  */
 
-const LOCAL_CODEX_URL = process.env.LOCAL_CODEX_URL ?? 'http://100.77.249.102:8765/api/chat';
+import { getPref } from '../state.js';
+
 const CODEX_MODEL = process.env.CODEX_MODEL ?? 'gpt-4o-mini';
+
+function getCodexUrl() {
+  return getPref('codex.url', null) ?? process.env.LOCAL_CODEX_URL ?? 'http://localhost:8765/api/chat';
+}
 
 const JSON_INSTRUCTION = `
 Respond ONLY with a single JSON object (no markdown, no extra text) with these fields:
@@ -34,9 +38,10 @@ Always populate say with a spoken intro or summary.`;
 
 // Returns: { say, play: [{title, artist, source}], reason, segue }
 export async function generate(systemPrompt, userMessage) {
+  const url = getCodexUrl();
   const fullMessage = `${systemPrompt}\n${JSON_INSTRUCTION}\n\n---\nUser: ${userMessage}`;
 
-  const res = await fetch(LOCAL_CODEX_URL, {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -53,7 +58,7 @@ export async function generate(systemPrompt, userMessage) {
 
   const data = await res.json();
   const text = data.content ?? data.message ?? data.text ?? data.choices?.[0]?.message?.content ?? '';
-  console.log(`[Codex] url=${LOCAL_CODEX_URL} model=${CODEX_MODEL}`);
+  console.log(`[Codex] url=${url} model=${CODEX_MODEL}`);
   console.log(`[Codex] raw response (first 400): ${text.slice(0, 400)}`);
   return parseOutput(text);
 }

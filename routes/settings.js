@@ -64,6 +64,7 @@ router.get('/', (req, res) => {
   const ttsProvider = getPref('tts.provider', process.env.TTS_PROVIDER ?? 'elevenlabs');
   res.json({
     agent:       getPref('ai.agent',       process.env.AI_AGENT ?? 'claude'),
+    codexUrl:    getPref('codex.url',      process.env.LOCAL_CODEX_URL ?? 'http://localhost:8765/api/chat'),
     voice:       getPref('tts.voice',      ''),
     energy:      getPref('mood.energy',    'auto'),
     prompt:      getPref('user.prompt',    ''),
@@ -90,6 +91,8 @@ router.post('/', (req, res) => {
   }
   if (workMin  !== undefined) setPref('session.workMin', String(parseInt(workMin) || 45));
   if (restMin  !== undefined) setPref('session.restMin', String(parseInt(restMin) || 5));
+  const { codexUrl } = req.body;
+  if (codexUrl !== undefined) setPref('codex.url', codexUrl.trim());
   res.json({ ok: true });
 });
 
