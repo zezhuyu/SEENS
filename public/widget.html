@@ -2424,7 +2424,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         }
         break; // success or non-retryable error
       }
-      // On success, WS dj-response will dismiss overlay
+      // On success, WS dj-response will dismiss overlay and start playback
     } catch (err) { console.error('[startRadio] fetch failed:', err); userChatPendingRef.current = false; skipNextRef.current(); }
   };
 

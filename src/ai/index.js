@@ -30,3 +30,10 @@ export async function generate(systemPrompt, userMessage) {
   const { agent } = getActiveAgent();
   return agent.generate(systemPrompt, userMessage);
 }
+
+export function cancelCurrentCall() {
+  try {
+    const { agent } = getActiveAgent();
+    if (typeof agent.cancelCurrentCall === 'function') agent.cancelCurrentCall();
+  } catch {}
+}

@@ -1,4 +1,4 @@
-import { generate, getActiveAgent } from './ai/index.js';
+import { generate, getActiveAgent, cancelCurrentCall } from './ai/index.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
 import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setPref, setSessionContext, setSessionStart } from './state.js';
@@ -35,6 +35,8 @@ const DIRECT_COMMANDS = [
 
 // Prevent concurrent AI calls — codex CLI cannot safely run in parallel.
 let aiCallInFlight = false;
+let aiCallGeneration = 0;
+let currentTriggerType = null;
 
 export async function handleInput(input, triggerType = 'user-chat') {
   const trimmed = input.trim();
@@ -48,10 +50,29 @@ export async function handleInput(input, triggerType = 'user-chat') {
   }
 
   if (aiCallInFlight) {
-    console.log(`[Router:${triggerType}] skipping — AI call already in flight`);
-    return { error: 'AI call in progress' };
+    if (triggerType === 'user-chat' && currentTriggerType !== 'user-chat') {
+      // User clicked Tune In (or sent a message) while a lower-priority background call
+      // (daily-plan, auto-refill, scheduler) is in progress — cancel it immediately.
+      console.log(`[Router:user-chat] preempting in-flight ${currentTriggerType} call`);
+      cancelCurrentCall();
+      let waited = 0;
+      while (aiCallInFlight && waited < 3000) {
+        await new Promise(r => setTimeout(r, 50));
+        waited += 50;
+      }
+      if (aiCallInFlight) {
+        console.log('[Router:user-chat] preempt timeout — returning busy');
+        return { error: 'AI call in progress' };
+      }
+    } else {
+      console.log(`[Router:${triggerType}] skipping — AI call already in flight`);
+      return { error: 'AI call in progress' };
+    }
   }
+
+  const myGeneration = ++aiCallGeneration;
   aiCallInFlight = true;
+  currentTriggerType = triggerType;
 
   try {
 
@@ -171,7 +192,13 @@ export async function handleInput(input, triggerType = 'user-chat') {
     } catch (err) {
       console.warn(`[Router:${triggerType}] plugin call failed: ${err.message}`);
       console.warn(`[Router:${triggerType}] plugin error stack: ${err.stack?.split('\n').slice(0,3).join(' | ')}`);
-      // Fall through with original response
+      // Run pass-2 with the error so the DJ acknowledges the failure rather than silently saying nothing.
+      try {
+        const errContext = `[Plugin error for "${trimmed}"]\nThe plugin "${activePluginName}" failed: ${err.message}.\nTell the user the plugin is unavailable and suggest they check that the service is running.`;
+        const pass2SystemPrompt = systemPrompt.split('\n\n---\n\n## Plugins')[0].split('\n\n---\n\n## ⛔ Final Reminder')[0].trimEnd();
+        djResponse = await generate(pass2SystemPrompt, errContext);
+        console.log(`[Router:${triggerType}] plugin error pass-2 say: "${djResponse.say?.slice(0, 100)}"`);
+      } catch { /* keep original pass-1 response as last resort */ }
     }
   } else {
     console.log(`[Router:${triggerType}] ${ts()} no pluginCall set by AI — skipping plugin two-pass`);
@@ -407,6 +434,9 @@ export async function handleInput(input, triggerType = 'user-chat') {
   return { djResponse, resolvedTracks, ttsUrl, agent: agentName };
 
   } finally {
-    aiCallInFlight = false;
+    if (aiCallGeneration === myGeneration) {
+      aiCallInFlight = false;
+      currentTriggerType = null;
+    }
   }
 }

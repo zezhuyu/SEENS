@@ -21,6 +21,15 @@ function readCodexConfigModel() {
 }
 const CODEX_MODEL = process.env.CODEX_MODEL ?? readCodexConfigModel() ?? 'o4-mini';
 
+let currentProc = null;
+
+export function cancelCurrentCall() {
+  if (currentProc) {
+    try { currentProc.kill('SIGTERM'); } catch {}
+    currentProc = null;
+  }
+}
+
 const JSON_INSTRUCTION = `
 Respond ONLY with a single JSON object (no markdown, no extra text) with these fields:
 {
@@ -101,17 +110,26 @@ function normalizeTrack(t) {
 function runCLI(bin, args) {
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args, { env: process.env, cwd: '/tmp', stdio: ['ignore', 'pipe', 'pipe'] });
+    currentProc = proc;
     let stderr = '';
 
     proc.stderr.on('data', d => stderr += d);
-    proc.stdout.on('data', () => {}); // drain stdout
+    proc.stdout.on('data', () => {});
 
     proc.on('close', (code, signal) => {
+      if (currentProc === proc) currentProc = null;
       if (code === 0 && !signal) { resolve(); return; }
       reject(new Error(`codex exited ${signal ?? code}: ${stderr.slice(0, 300)}`));
     });
-    proc.on('error', reject);
+    proc.on('error', err => {
+      if (currentProc === proc) currentProc = null;
+      reject(err);
+    });
 
-    setTimeout(() => { proc.kill(); reject(new Error('codex CLI timeout')); }, 120_000);
+    setTimeout(() => {
+      if (currentProc === proc) currentProc = null;
+      proc.kill();
+      reject(new Error('codex CLI timeout'));
+    }, 120_000);
   });
 }
