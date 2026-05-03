@@ -5,21 +5,12 @@
 
 import { spawn } from 'child_process';
 import { readFileSync, unlinkSync } from 'fs';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { join } from 'path';
 
-const CODEX_BIN = process.env.CODEX_BIN ?? 'codex';
-
-// Read model from ~/.codex/config.toml so ChatGPT-account users get their configured model.
-// Override via CODEX_MODEL env var; fall back to o4-mini if config is unreadable.
-function readCodexConfigModel() {
-  try {
-    const cfg = readFileSync(join(homedir(), '.codex', 'config.toml'), 'utf8');
-    const m = cfg.match(/^\s*model\s*=\s*"([^"]+)"/m);
-    return m?.[1] ?? null;
-  } catch { return null; }
-}
-const CODEX_MODEL = process.env.CODEX_MODEL ?? readCodexConfigModel() ?? 'o4-mini';
+const CODEX_BIN   = process.env.CODEX_BIN   ?? 'codex';
+// Only override model if explicitly set — otherwise let ~/.codex/config.toml decide
+const CODEX_MODEL = process.env.CODEX_MODEL ?? null;
 
 const JSON_INSTRUCTION = `
 Respond ONLY with a single JSON object (no markdown, no extra text) with these fields:
@@ -48,10 +39,7 @@ export async function generate(systemPrompt, userMessage) {
     '--output-last-message', outPath,
     '--ephemeral',
     '--full-auto',
-    '--skip-git-repo-check',
-    '--ignore-user-config',  // skip oh-my-codex MCP servers + AGENTS.md (~50s overhead)
-    '-C', '/tmp',            // use /tmp as workdir — avoids SIP-protected / in packaged app
-    '-m', CODEX_MODEL,
+    ...(CODEX_MODEL ? ['-m', CODEX_MODEL] : []),
   ];
 
   try {
@@ -100,18 +88,18 @@ function normalizeTrack(t) {
 
 function runCLI(bin, args) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args, { env: process.env, cwd: '/tmp', stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(bin, args, { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
 
     proc.stderr.on('data', d => stderr += d);
     proc.stdout.on('data', () => {}); // drain stdout
 
-    proc.on('close', (code, signal) => {
-      if (code === 0 && !signal) { resolve(); return; }
-      reject(new Error(`codex exited ${signal ?? code}: ${stderr.slice(0, 300)}`));
+    proc.on('close', (code) => {
+      if (code !== 0) reject(new Error(`codex exited ${code}: ${stderr.slice(0, 300)}`));
+      else resolve();
     });
     proc.on('error', reject);
 
-    setTimeout(() => { proc.kill(); reject(new Error('codex CLI timeout')); }, 120_000);
+    setTimeout(() => { proc.kill(); reject(new Error('codex CLI timeout')); }, 60_000);
   });
 }

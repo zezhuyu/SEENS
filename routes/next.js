@@ -7,9 +7,16 @@ const router = express.Router();
 
 const MIN_QUEUE = 2;   // refill when fewer than this many tracks remain
 let refilling = false;
+const SERVER_START_MS = Date.now();
+const STARTUP_GRACE_MS = 45_000; // don't auto-refill during first 45s — user-chat from Tune In will populate the queue
 
 function refillFromHistory() {
   if (refilling) return;
+  const elapsed = Date.now() - SERVER_START_MS;
+  if (elapsed < STARTUP_GRACE_MS) {
+    console.log(`[Queue] Startup grace (${Math.round(elapsed / 1000)}s < 45s) — skipping auto-refill`);
+    return;
+  }
   refilling = true;
 
   const recent = getRecentPlays(10);

@@ -33,6 +33,9 @@ const DIRECT_COMMANDS = [
   { pattern: /^(resume|play)$/i, action: 'resume' },
 ];
 
+// Prevent concurrent AI calls — codex CLI cannot safely run in parallel.
+let aiCallInFlight = false;
+
 export async function handleInput(input, triggerType = 'user-chat') {
   const trimmed = input.trim();
 
@@ -43,6 +46,14 @@ export async function handleInput(input, triggerType = 'user-chat') {
       return { action: cmd.action, say: null };
     }
   }
+
+  if (aiCallInFlight) {
+    console.log(`[Router:${triggerType}] skipping — AI call already in flight`);
+    return { error: 'AI call in progress' };
+  }
+  aiCallInFlight = true;
+
+  try {
 
   const t0 = Date.now();
   const ts = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
@@ -394,4 +405,8 @@ export async function handleInput(input, triggerType = 'user-chat') {
   });
 
   return { djResponse, resolvedTracks, ttsUrl, agent: agentName };
+
+  } finally {
+    aiCallInFlight = false;
+  }
 }

@@ -10,7 +10,29 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, session, ipcMain } = require('electron');
 const path  = require('path');
 const http  = require('http');
+const fs    = require('fs');
 const { pathToFileURL } = require('url');
+
+// Redirect console output to /tmp/seens-debug.log so issues are always capturable.
+// Append across launches so context is preserved; rotate when file exceeds 2 MB.
+const LOG_PATH = '/tmp/seens-debug.log';
+try {
+  if (fs.existsSync(LOG_PATH) && fs.statSync(LOG_PATH).size > 2 * 1024 * 1024) {
+    fs.renameSync(LOG_PATH, LOG_PATH + '.old');
+  }
+  const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
+  logStream.write(`\n=== SEENS start ${new Date().toISOString()} ===\n`);
+  const origLog  = console.log.bind(console);
+  const origWarn = console.warn.bind(console);
+  const origErr  = console.error.bind(console);
+  const writeLine = (prefix, args) => {
+    const line = prefix + args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') + '\n';
+    logStream.write(line);
+  };
+  console.log   = (...a) => { origLog(...a);  writeLine('', a); };
+  console.warn  = (...a) => { origWarn(...a); writeLine('[WARN] ', a); };
+  console.error = (...a) => { origErr(...a);  writeLine('[ERR] ', a); };
+} catch (e) { /* log redirect failed — continue silently */ }
 
 // Disable Chromium's autoplay policy so DJ audio and music play without a
 // prior user gesture on every track (Electron enforces this by default).
