@@ -12,8 +12,13 @@
  */
 
 const { execSync } = require('child_process');
+const crypto = require('crypto');
 const path = require('path');
 const fs   = require('fs');
+
+function md5(filePath) {
+  return crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
+}
 
 const ROOT        = path.resolve(__dirname, '..');
 const APP         = process.env.SEENS_APP_PATH ?? '/Applications/Seens Radio.app';
@@ -66,13 +71,13 @@ execSync(`cp -r "${path.join(ROOT, 'node_modules')}" "${path.join(STAGE, 'node_m
   const SQLITE_ABI     = '130';        // Electron 33
   const SQLITE_ARCH    = 'arm64';
   const SQLITE_PLAT    = 'darwin';
-  const KNOWN_SIZE     = 1931680;      // bytes for this specific prebuilt
+  const KNOWN_MD5      = '461f221f7771de1682b049246114e885'; // Electron v130 arm64 prebuilt
 
   const stageNode = path.join(STAGE, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node');
   const cacheNode = path.join(ROOT,  'dist', '.bsqlite3-electron-v130.node');
 
-  // Use cached copy if size matches
-  if (fs.existsSync(cacheNode) && fs.statSync(cacheNode).size === KNOWN_SIZE) {
+  // Use cached copy if MD5 matches (size alone is not reliable — host Node.js binary may coincide)
+  if (fs.existsSync(cacheNode) && md5(cacheNode) === KNOWN_MD5) {
     fs.copyFileSync(cacheNode, stageNode);
     console.log('  better-sqlite3: using cached Electron v130 prebuilt');
     return;
@@ -113,6 +118,21 @@ asar.createPackageWithOptions(STAGE, OUTPUT, { unpack: '*.node' }).then(() => {
     // renameSync fails across volumes; use cp+rm instead
     execSync(`cp -r "${OUTPUT_UNPACK}" "${ASAR_UNPACK}"`);
     fs.rmSync(OUTPUT_UNPACK, { recursive: true, force: true });
+  }
+
+  // 5b. Always force-overwrite the sqlite3 binary from the verified cache,
+  //     because cp -r can silently leave the wrong binary if the app was
+  //     still running (file locks prevent full rmSync, so cp nests instead
+  //     of replacing).
+  const SQLITE_INSTALLED = path.join(
+    ASAR_UNPACK,
+    'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
+  );
+  const SQLITE_CACHE = path.join(ROOT, 'dist', '.bsqlite3-electron-v130.node');
+  if (fs.existsSync(SQLITE_CACHE)) {
+    fs.mkdirSync(path.dirname(SQLITE_INSTALLED), { recursive: true });
+    fs.copyFileSync(SQLITE_CACHE, SQLITE_INSTALLED);
+    console.log('  better-sqlite3: Electron binary force-installed in app.asar.unpacked');
   }
 
   // 6. Cleanup

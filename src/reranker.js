@@ -23,7 +23,7 @@ import { getPref, setPref } from './state.js';
 import { getWeatherContext } from './weather.js';
 
 const ROOT          = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const DEFAULT_SCRIPT = path.join(ROOT, 'seens-reranker', 'subprocess_main.py');
+const DEFAULT_SCRIPT = path.join(ROOT, 'music-reranker', 'subprocess_main.py');
 const RERANKER_URL  = process.env.RERANKER_URL ?? 'http://127.0.0.1:7480';
 const CONNECT_TIMEOUT = 3_000;
 const RERANK_TIMEOUT  = 30_000;   // model inference can be slow on first call
@@ -43,11 +43,13 @@ function _scriptPath() {
 
 function _pythonBin(scriptPath) {
   // Prefer the venv python sibling to the script's repo root.
-  // e.g. /path/to/seens-reranker/subprocess_main.py
-  //   → /path/to/seens-reranker/venv/bin/python3
+  // Checks both .venv (standard) and venv (legacy) directory names.
   const repoRoot = path.dirname(scriptPath);
-  const venvPy   = path.join(repoRoot, 'venv', 'bin', 'python3');
-  return fs.existsSync(venvPy) ? venvPy : (process.env.RERANKER_PYTHON ?? 'python3');
+  for (const venvDir of ['.venv', 'venv']) {
+    const candidate = path.join(repoRoot, venvDir, 'bin', 'python3');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return process.env.RERANKER_PYTHON ?? 'python3';
 }
 
 function _spawnSubprocess() {

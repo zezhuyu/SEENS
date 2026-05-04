@@ -7,8 +7,13 @@
  */
 
 const { execSync } = require('child_process');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+
+function md5(filePath) {
+  return crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
+}
 
 const ROOT = path.resolve(__dirname, '..');
 const DEST = process.argv[2] ? path.resolve(process.argv[2]) : null;
@@ -16,7 +21,7 @@ const VERSION = '12.9.0'; // must match package.json better-sqlite3 version
 const ABI = '130';        // Electron 33
 const ARCH = 'arm64';
 const PLAT = 'darwin';
-const KNOWN_SIZE = 1931680;
+const KNOWN_MD5 = '461f221f7771de1682b049246114e885'; // Electron v130 arm64 prebuilt
 
 if (!DEST) {
   console.error('Usage: node scripts/install-sqlite3-prebuilt.cjs <packaged better_sqlite3.node path>');
@@ -28,14 +33,15 @@ const TMP_TGZ = path.join(ROOT, 'dist', '.bsqlite3-prebuilt.tar.gz');
 const TMP_UNPACK = path.join(ROOT, 'dist', '.bsqlite3-unpack');
 const CACHE = path.join(ROOT, 'dist', `.bsqlite3-electron-v${ABI}.node`);
 
-if (fs.existsSync(DEST) && fs.statSync(DEST).size === KNOWN_SIZE) {
+// MD5 check is necessary — host Node.js binary may coincidentally match the Electron prebuilt's byte size
+if (fs.existsSync(DEST) && md5(DEST) === KNOWN_MD5) {
   console.log('better-sqlite3 Electron prebuilt already present');
   process.exit(0);
 }
 
 fs.mkdirSync(path.dirname(DEST), { recursive: true });
 
-if (fs.existsSync(CACHE) && fs.statSync(CACHE).size === KNOWN_SIZE) {
+if (fs.existsSync(CACHE) && md5(CACHE) === KNOWN_MD5) {
   fs.copyFileSync(CACHE, DEST);
   console.log('better-sqlite3 Electron prebuilt restored from cache');
   process.exit(0);
