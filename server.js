@@ -190,6 +190,10 @@ app.get('/api/location', async (req, res) => {
   res.status(503).json({ error: 'Location detection unavailable' });
 });
 
+app.get('/api/ready', (req, res) => {
+  res.json({ app: 'seens-radio', ready: true });
+});
+
 // SPA fallback
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -256,6 +260,13 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
   });
 
   server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE' && process.versions.electron) {
+      globalThis.SEENS_SERVER_PORT = PORT;
+      process.env.PORT = String(PORT);
+      console.warn(`[Server] Port ${PORT} already in use — reusing existing local server`);
+      resolve(PORT);
+      return;
+    }
     console.error('[Server] listen failed:', err);
     reject(err);
   });

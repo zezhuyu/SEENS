@@ -9,6 +9,7 @@ router.post('/', async (req, res) => {
 
   try {
     const result = await handleInput(message);
+    if (result.error) return res.status(503).json({ error: result.error, retry: true });
     res.json(result);
   } catch (err) {
     console.error('[/api/chat]', err);

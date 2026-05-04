@@ -10,7 +10,34 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, session, ipcMain } = require('electron');
 const path  = require('path');
 const http  = require('http');
+const fs    = require('fs');
+const { execFileSync } = require('child_process');
 const { pathToFileURL } = require('url');
+
+// Redirect console output to /tmp/seens-debug.log so issues are always capturable.
+// Append across launches so context is preserved; rotate when file exceeds 2 MB.
+const LOG_PATH = '/tmp/seens-debug.log';
+try {
+  if (fs.existsSync(LOG_PATH) && fs.statSync(LOG_PATH).size > 2 * 1024 * 1024) {
+    fs.renameSync(LOG_PATH, LOG_PATH + '.old');
+  }
+  const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
+  logStream.write(`\n=== SEENS start ${new Date().toISOString()} ===\n`);
+  const origLog  = console.log.bind(console);
+  const origWarn = console.warn.bind(console);
+  const origErr  = console.error.bind(console);
+  const writeLine = (prefix, args) => {
+    const line = prefix + args.map(a => {
+      if (typeof a === 'string') return a;
+      if (a instanceof Error) return a.stack || a.message;
+      try { return JSON.stringify(a); } catch { return String(a); }
+    }).join(' ') + '\n';
+    logStream.write(line);
+  };
+  console.log   = (...a) => { origLog(...a);  writeLine('', a); };
+  console.warn  = (...a) => { origWarn(...a); writeLine('[WARN] ', a); };
+  console.error = (...a) => { origErr(...a);  writeLine('[ERR] ', a); };
+} catch (e) { /* log redirect failed — continue silently */ }
 
 // Disable Chromium's autoplay policy so DJ audio and music play without a
 // prior user gesture on every track (Electron enforces this by default).
@@ -37,9 +64,29 @@ if (_dotenvResult.error) {
 let PORT = parseInt(process.env.PORT || '8080', 10);
 let serverPort = null;
 
-// Ensure Homebrew binaries (yt-dlp, ffmpeg, SwitchAudioSource) are on PATH
-// when the app is launched from Finder (which doesn't inherit the shell PATH).
-process.env.PATH = `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'}`;
+// Finder-launched apps do not inherit the user's shell PATH. Keep the original
+// Homebrew fallback, but also merge login-shell PATH and optional .env entries.
+{
+  const splitPath = (value) => String(value || '').split(path.delimiter).filter(Boolean);
+  const basePath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
+  let shellPath = '';
+  try {
+    shellPath = execFileSync(process.env.SHELL || '/bin/zsh', ['-lc', 'printf "%s" "$PATH"'], {
+      encoding: 'utf8',
+      timeout: 3000,
+      env: { ...process.env, PATH: basePath },
+    });
+  } catch (error) {
+    console.warn('[Electron] Login shell PATH lookup failed:', error.message);
+  }
+  process.env.PATH = [...new Set([
+    ...splitPath(process.env.SEENS_EXTRA_PATHS),
+    ...splitPath(shellPath),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    ...splitPath(basePath),
+  ])].join(path.delimiter);
+}
 
 let tray       = null;
 let mainWindow = null;
@@ -63,11 +110,18 @@ function waitForServer(retries = 60) {
         return reject(new Error('server port not published'));
       }
 
-      http.get(`http://127.0.0.1:${port}/widget.html`, (res) => {
-        res.resume(); // drain response
-        if (res.statusCode < 500) return resolve();
-        if (n > 0) setTimeout(() => attempt(n - 1), 300);
-        else reject(new Error('server not ready'));
+      http.get(`http://127.0.0.1:${port}/api/ready`, (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { body += chunk; });
+        res.on('end', () => {
+          try {
+            const ready = res.statusCode === 200 && JSON.parse(body).app === 'seens-radio';
+            if (ready) return resolve();
+          } catch {}
+          if (n > 0) setTimeout(() => attempt(n - 1), 300);
+          else reject(new Error('server not ready'));
+        });
       }).on('error', () => {
         if (n > 0) setTimeout(() => attempt(n - 1), 300);
         else reject(new Error('server not ready'));

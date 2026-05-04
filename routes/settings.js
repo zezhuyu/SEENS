@@ -61,7 +61,7 @@ const router = express.Router();
 
 // GET /api/settings — all user-facing prefs
 router.get('/', (req, res) => {
-  const ttsProvider = process.env.TTS_PROVIDER ?? 'elevenlabs';
+  const ttsProvider = getPref('tts.provider', process.env.TTS_PROVIDER ?? 'elevenlabs');
   res.json({
     agent:       getPref('ai.agent',       process.env.AI_AGENT ?? 'claude'),
     voice:       getPref('tts.voice',      ''),
@@ -202,6 +202,10 @@ router.post('/env-keys', (req, res) => {
       writeEnvKey(key, val.trim());
       updated.push(key);
     }
+  }
+  // Persist TTS_PROVIDER to prefs so it survives restart (asar .env is read-only in packaged app)
+  if (typeof req.body['TTS_PROVIDER'] === 'string' && req.body['TTS_PROVIDER'].trim()) {
+    setPref('tts.provider', req.body['TTS_PROVIDER'].trim());
   }
   res.json({ ok: true, updated });
 });

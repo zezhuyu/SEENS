@@ -68,12 +68,17 @@ async function resolveSpotifyMeta(track) {
   const items = data.tracks?.items ?? [];
   if (!items.length) return track;
 
-  // Pick the item whose artist name best matches what the DJ requested
+  // Pick the item whose artist name best matches what the DJ requested.
+  // If no item matches the requested artist, return the original track unchanged —
+  // don't fall back to a random result which would give a completely wrong artist.
   const wantedWords = artistWords(track.artist);
-  const best = items.find(item => {
-    const got = item.artists.map(a => a.name).join(' ');
-    return wantedWords.some(w => got.toLowerCase().includes(w));
-  }) ?? items[0];
+  const best = wantedWords.length > 0
+    ? items.find(item => {
+        const got = item.artists.map(a => a.name).join(' ');
+        return wantedWords.some(w => got.toLowerCase().includes(w));
+      }) ?? null
+    : items[0];
+  if (!best) return track;
 
   return {
     ...track,
@@ -136,11 +141,19 @@ async function searchYouTube(title, artist) {
     } catch { /* try next query */ }
   }
 
+  // Reject title-only matches (score=0) when the artist has searchable words —
+  // common title words like "mine", "home", "love" appear in thousands of videos
+  // and without an artist hit we'd return the wrong song.
+  if (bestScore === 0 && artistWds.length > 0) {
+    console.warn(`[Resolver] yt rejected title-only match for "${artist} — ${title}" (artist not found in results)`);
+    bestVideoId = null;
+  }
+
   if (bestVideoId) {
-    const label = bestScore === 2 ? 'artist+title match' : bestScore === 1 ? 'artist match only' : 'title match only';
+    const label = bestScore === 2 ? 'artist+title' : 'artist match only';
     console.log(`[Resolver] yt "${title}" by "${artist}" → ${bestVideoId} (${label})`);
   } else {
-    console.warn(`[Resolver] yt no match for "${artist} — ${title}"`);
+    console.warn(`[Resolver] yt no confident match for "${artist} — ${title}"`);
   }
   return bestVideoId;
 }

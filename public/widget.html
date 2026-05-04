@@ -670,6 +670,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [moodRulesDraft, setMoodRulesDraft]         = useState('');
   const [tasteDraft, setTasteDraft]                 = useState('');
   const [locationDraft, setLocationDraft]           = useState('');
+
   const [plugins, setPlugins]                       = useState([]);
   const [addingPlugin, setAddingPlugin]             = useState(false);
   const [newPlugin, setNewPlugin]                   = useState({ name:'', description:'', baseUrl:'' });
@@ -718,6 +719,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       setMoodRulesDraft(moodRes.status === 'fulfilled' ? (moodRes.value.content ?? '') : '');
       setTasteDraft(tasteRes.status === 'fulfilled' ? (tasteRes.value.content ?? '') : '');
       setLocationDraft(settings.location ?? '');
+
       setPlugins(pluginsRes.status === 'fulfilled' ? pluginsRes.value : []);
       setMusicConnectors(connectorsRes.status === 'fulfilled' ? connectorsRes.value : []);
       setApiKeys(envKeysRes.status === 'fulfilled' ? envKeysRes.value : {});
@@ -1128,6 +1130,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
               ))}
             </div>
           </div>
+
           <div className="settings-row">
             <div className="settings-row-label">DJ Voice</div>
             <select className="settings-select" value={currentVoice}
@@ -1346,7 +1349,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
           {plugins.map(p => (
             <div key={p.name} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
               <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:12, fontWeight:600, color:'var(--ink-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
+                <div style={{ fontSize:12, fontWeight:600, color:'var(--ink-3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</div>
                 {p.baseUrl && <div style={{ fontSize:10, color:'var(--ink-3)', fontFamily:'var(--font-mono)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.baseUrl}</div>}
               </div>
               <label style={{ display:'flex', alignItems:'center', gap:4, cursor:'pointer', flexShrink:0 }}>
@@ -1950,7 +1953,11 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     audioRef.current.volume = 0.05;
     ttsRef.current.src = url;
     ttsRef.current.volume = 1;
-    ttsRef.current.play().catch(() => {
+    console.log('[TTS] play', url);
+    ttsRef.current.play().then(() => {
+      console.log('[TTS] play() resolved OK');
+    }).catch((err) => {
+      console.warn('[TTS] play() rejected:', err?.name, err?.message);
       ttsPlayingRef.current = false;
       audioRef.current.volume = volumeRef.current / 100;
       // TTS play rejected — don't leave cold-start track stuck waiting forever
@@ -2247,13 +2254,27 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 
       if (msg.say) {
         setDjText(msg.say);
-        setDjMessages(prev => [...prev, { from:'dj', text:msg.say, time:fmtClock(new Date()) }]);
+        // Interim (plugin loading) messages show in the banner only — the real response
+        // follows and adds itself to chat history. Keeps the conversation log clean.
+        if (!msg.interim) {
+          setDjMessages(prev => [...prev, { from:'dj', text:msg.say, time:fmtClock(new Date()) }]);
+        }
       }
       if (msg.agent) setDjAgent(msg.agent);
       const audio = audioRef.current;
       const audioActive = playingRef.current || ttsPlayingRef.current || (audio.src && !audio.ended && !audio.error);
       const userAsked = msg.trigger === 'user-chat';
       const intent = msg.playIntent ?? (userAsked ? 'now' : 'end');
+
+      // When a plugin is loading for a user request, block the near-end transition so
+      // another track doesn't start playing while we're waiting for the plugin result.
+      if (msg.interim && userAsked && !pendingIntroTTSRef.current) {
+        pendingIntroTTSRef.current = 'plugin-loading';
+      }
+      // Real response arriving — clear the plugin-loading placeholder if it's still set
+      if (!msg.interim && pendingIntroTTSRef.current === 'plugin-loading') {
+        pendingIntroTTSRef.current = null;
+      }
 
       // Update queue display only after intent is known:
       // - intent=now: replace entire queue, first track is the new "now playing"
@@ -2308,6 +2329,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         }
       } else {
         // cold start
+        console.log('[handleDJResponse] cold-start path — ttsUrl:', msg.ttsUrl, 'firstTrack:', msg.firstTrack?.title ?? null);
         if (msg.ttsUrl && msg.firstTrack) {
           coldStartTrackRef.current = msg.firstTrack;
           enqueueTTS(msg.ttsUrl);
@@ -2378,18 +2400,31 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     try {
       await fetch('/api/settings/queue/clear', { method: 'POST' });
       await fetch('/api/settings/session/start', { method: 'POST' });
-      const chatRes = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Start my listening session. Tell me what you have planned and introduce the first track.' }),
-      });
-      if (!chatRes.ok) {
-        const errJson = await chatRes.json().catch(() => ({ error: `HTTP ${chatRes.status}` }));
-        console.error('[startRadio] /api/chat error:', errJson.error);
-        setOverlayLabel(`DJ error: ${errJson.error}`);
-        userChatPendingRef.current = false;
+      // Retry up to 3 times if the server is busy with another AI call
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const chatRes = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Start my listening session. Tell me what you have planned and introduce the first track.' }),
+        });
+        if (chatRes.status === 503) {
+          const j = await chatRes.json().catch(() => ({}));
+          if (j.retry && attempt < 2) {
+            console.log(`[startRadio] server busy — retrying in 10s (attempt ${attempt + 1})`);
+            setOverlayLabel('Tuning in…');
+            await new Promise(r => setTimeout(r, 10_000));
+            continue;
+          }
+        }
+        if (!chatRes.ok) {
+          const errJson = await chatRes.json().catch(() => ({ error: `HTTP ${chatRes.status}` }));
+          console.error('[startRadio] /api/chat error:', errJson.error);
+          setOverlayLabel(`DJ error: ${errJson.error}`);
+          userChatPendingRef.current = false;
+        }
+        break; // success or non-retryable error
       }
-      // On success, WS dj-response will dismiss overlay
+      // On success, WS dj-response will dismiss overlay and start playback
     } catch (err) { console.error('[startRadio] fetch failed:', err); userChatPendingRef.current = false; skipNextRef.current(); }
   };
 
@@ -2915,16 +2950,16 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         <div className="tune-in-gate" style={{ borderRadius:0 }}>
           <div className="ti-label">SEENS · FM</div>
           <button className="ti-btn" onClick={() => {
-            // Permanently unlock audio via Web Audio API inside this user gesture.
-            // Chromium blocks audio.play() after async gaps; an AudioContext started
-            // synchronously here marks the document as "user-activated" for all time.
+            // Unlock TTS audio element and AudioContext during user gesture.
+            // Only unlock ttsRef (not audioRef) — playing on audioRef triggers onEnded→skipNext
+            // as an unwanted side effect. audioRef is unlocked by --autoplay-policy switch.
+            const silentSrc = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+            try {
+              const t = ttsRef.current; t.src = silentSrc; t.volume = 0; t.play().catch(() => {});
+            } catch {}
             try {
               const ac = new AudioContext();
-              const buf = ac.createBuffer(1, 1, 22050);
-              const src = ac.createBufferSource();
-              src.buffer = buf;
-              src.connect(ac.destination);
-              src.start(0);
+              ac.createBufferSource().connect(ac.destination);
               ac.resume();
             } catch {}
             startRadio();

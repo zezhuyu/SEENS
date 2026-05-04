@@ -1,5 +1,6 @@
 import express from 'express';
 import { readUserFile } from '../src/paths.js';
+import { recordRestPiece, getRecentRestPieces } from '../src/state.js';
 
 const router = express.Router();
 
@@ -139,6 +140,11 @@ router.get('/', async (req, res) => {
   const prefs = readPrefs();
   const prefsSection = prefs ? `\n\nUser preferences for rest pieces:\n${prefs}` : '';
 
+  const recentPieces = getRecentRestPieces();
+  const recentSection = recentPieces.length
+    ? `\n\nDo NOT repeat any of these recently shown works — pick something entirely different:\n${recentPieces.map(p => `- "${p.title}"${p.artist ? ` by ${p.artist}` : ''} [${p.cat}]`).join('\n')}`
+    : '';
+
   // For Story category: fetch real HN stories as context
   const isStory = validCat === 'Story' || (!validCat && false); // only when explicitly requested
   let hnContext = '';
@@ -169,7 +175,7 @@ router.get('/', async (req, res) => {
         messages: [
           {
             role: 'system',
-            content: `You curate one cultural work as a short creative rest break for a focused person who values depth and taste. ${catLine}${prefsSection}
+            content: `You curate one cultural work as a short creative rest break for a focused person who values depth and taste. ${catLine}${prefsSection}${recentSection}
 
 Return JSON with exactly these fields:
 - cat: one of ${ALL_CATS.join(', ')}
@@ -279,6 +285,7 @@ Guidelines:
       if (!imageUrl) console.warn(`[RestPiece] No image found for "${piece.title}"`);
     }
 
+    recordRestPiece({ title: piece.title, artist: piece.artist ?? '', cat: piece.cat });
     res.json({ ...piece, ...gradient, imageUrl });
   } catch (err) {
     console.error('[RestPiece]', err.message);

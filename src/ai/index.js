@@ -53,3 +53,8 @@ export async function agentReset() {
 export function isAgentActive() {
   return agent.isActive();
 }
+
+/** Cancel any in-flight generate() call — used to preempt background tasks. */
+export function cancelCurrentCall() {
+  agent.cancel();
+}

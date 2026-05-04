@@ -292,9 +292,11 @@ export function pluginSystemContext() {
   if (!enabled.length) return null;
 
   const lines = [
-    'You have access to external plugins.',
-    'IMPORTANT: When the user asks for news, headlines, briefings, podcasts, episodes, or ANYTHING a plugin can fetch — you MUST set "pluginCall" and leave "play" empty. Do NOT answer from memory. Do NOT make up content or URLs.',
-    'You will receive the plugin result in the next turn and should then set "pluginAction" to decide what to do with it.',
+    'You have access to external plugins listed below.',
+    'IMPORTANT: When the user\'s request matches what a plugin can provide, you MUST issue a pluginCall — do NOT answer from memory, fabricate data, or guess URLs.',
+    'Read each plugin\'s description and endpoints to decide which one to call.',
+    'When in doubt: if the data could have changed since yesterday, use the plugin.',
+    'You will receive the plugin result in the next turn and should then set "pluginAction" accordingly.',
     '',
     'Available plugins:',
   ];

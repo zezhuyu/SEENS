@@ -19,19 +19,18 @@ const CACHE_DIR = process.env.SEENS_DATA_DIR
   : path.join(__dirname, '../tts-cache');
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
-const PROVIDER = process.env.TTS_PROVIDER ?? 'elevenlabs';
-
 // Returns { url: '/tts/hash.mp3' }
 export async function synthesize(text) {
-  // Runtime voice override from prefs (set via settings panel)
+  // Read provider and voice dynamically so UI changes take effect immediately
+  const provider  = getPref('tts.provider', process.env.TTS_PROVIDER ?? 'elevenlabs');
   const voicePref = getPref('tts.voice', '').trim();
-  const cacheKey = `${PROVIDER}::${voicePref}::${text}`;
+  const cacheKey = `${provider}::${voicePref}::${text}`;
   const hash = createHash('sha256').update(cacheKey).digest('hex').slice(0, 16);
   const mp3Path = path.join(CACHE_DIR, `${hash}.mp3`);
 
   if (fs.existsSync(mp3Path)) return { url: `/tts/${hash}.mp3` };
 
-  switch (PROVIDER) {
+  switch (provider) {
     case 'openai':   await synthesizeOpenAI(text, mp3Path, voicePref);   break;
     case 'say':      await synthesizeSay(text, mp3Path, voicePref);      break;
     case 'elevenlabs':

@@ -131,6 +131,18 @@ class AgentClient {
     return this._ready && !!this._proc;
   }
 
+  /**
+   * Cancel any in-flight generate() call — rejects pending promises so the
+   * router can preempt a background task when the user sends a new message.
+   * The agent subprocess stays alive and continues managing session memory.
+   */
+  cancel() {
+    for (const [, { reject }] of this._pending) {
+      reject(new Error('cancelled'));
+    }
+    this._pending.clear();
+  }
+
   // ── internals ───────────────────────────────────────────────────────────────
 
   async _call(method, params) {
