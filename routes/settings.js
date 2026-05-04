@@ -124,6 +124,26 @@ router.post('/agent/reset', async (req, res) => {
   }
 });
 
+// GET /api/settings/reranker — reranker enabled state + health
+router.get('/reranker', async (req, res) => {
+  const enabled = getPref('reranker.enabled', '0') === '1';
+  let health = null;
+  if (enabled) {
+    try {
+      const r = await fetch('http://127.0.0.1:7480/api/health', { signal: AbortSignal.timeout(2000) });
+      health = r.ok ? await r.json() : null;
+    } catch { health = null; }
+  }
+  res.json({ enabled, reachable: !!health, health });
+});
+
+// POST /api/settings/reranker — enable or disable
+router.post('/reranker', (req, res) => {
+  const { enabled } = req.body;
+  setPref('reranker.enabled', enabled ? '1' : '0');
+  res.json({ enabled: !!enabled });
+});
+
 // GET /api/settings/auth-status — which music services are connected
 router.get('/auth-status', (req, res) => {
   res.json({

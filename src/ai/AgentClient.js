@@ -17,21 +17,19 @@ import readline     from 'readline';
 import { fileURLToPath } from 'url';
 import fs           from 'fs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname    = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_SCRIPT = path.join(__dirname, 'AgentProcess.js');
-const MCP_CONFIG   = path.join(__dirname, '../../.mcp.json');
-const SKILLS_DIR   = path.join(__dirname, '../../skills');
+const PLUGINS_FILE = path.join(__dirname, '../../USER/plugins.json');
 
-// Load skill files once — they don't change at runtime
-function loadSkills() {
-  try {
-    return fs.readdirSync(SKILLS_DIR)
-      .filter(f => f.endsWith('.md'))
-      .map(f => fs.readFileSync(path.join(SKILLS_DIR, f), 'utf8'));
-  } catch { return []; }
+// Load plugins.json — re-read on each generate() so hot-edited plugins are
+// picked up without a restart.  The agent decides what to do with them.
+function loadPlugins() {
+  try { return JSON.parse(fs.readFileSync(PLUGINS_FILE, 'utf8')) ?? []; }
+  catch { return []; }
 }
 
-const SKILLS = loadSkills();
+// MCPs and skills are NOT loaded here — the agent subprocess discovers them
+// itself via claude CLI's auto-loading from ~/.claude/ and PROJECT_ROOT/.mcp.json
 
 class AgentClient {
   constructor() {
@@ -116,8 +114,7 @@ class AgentClient {
     return this._call('generate', {
       systemPrompt,
       userMessage,
-      mcpConfigPath: MCP_CONFIG,
-      skills: SKILLS,
+      plugins: loadPlugins(),
     });
   }
 

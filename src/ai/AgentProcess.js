@@ -15,8 +15,13 @@
  *   Response: { id, result }  |  { id, error }
  *
  * Methods:
- *   generate   { systemPrompt, userMessage, mcpConfigPath, skills }
+  *   generate   { systemPrompt, userMessage, plugins? }
  *              → { say, play, reason, segue, sessionId? }
+ *
+ * MCPs and skills are discovered by the agent itself:
+ *   Claude CLI auto-loads ~/.claude/settings.json (global MCPs + skills)
+ *   and .mcp.json in cwd (project MCPs) — seens-radio does NOT manage these.
+ *   seens-radio only sends plugins (USER/plugins.json) so the DJ can use them.
  *   status     {} → { backend, sessionId, messageCount, uptime }
  *   reset      {} → { ok } — clears this session's memory
  */
@@ -26,7 +31,7 @@ import fs             from 'fs';
 import path           from 'path';
 import os             from 'os';
 import readline       from 'readline';
-import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 
 // ─── Agent memory directory (outside SEENS app) ──────────────────────────────
 
@@ -36,6 +41,10 @@ fs.mkdirSync(AGENT_DIR, { recursive: true });
 const STATE_FILE   = path.join(AGENT_DIR, 'state.json');
 const CODEX_HIST   = path.join(AGENT_DIR, 'codex-messages.json');
 const CLAUDE_SID   = path.join(AGENT_DIR, 'claude-session');
+
+// seens-radio project root — claude CLI auto-loads .mcp.json and
+// ~/.claude/settings.json (global MCPs + skills) from here
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -119,34 +128,34 @@ Always populate say.`;
 
 // ─── Backend: Claude ──────────────────────────────────────────────────────────
 
-async function generateClaude(systemPrompt, userMessage, mcpConfigPath, skills) {
+// plugins: array of plugin descriptors from USER/plugins.json (SEENS app plugins)
+// MCPs and skills are NOT passed from seens — claude CLI auto-loads them:
+//   ~/.claude/settings.json → global MCPs + skills
+//   PROJECT_ROOT/.mcp.json  → project MCPs (seens-notify etc.)
+async function generateClaude(systemPrompt, userMessage, plugins) {
+  let appendPrompt = systemPrompt;
+  if (plugins?.length) {
+    appendPrompt += '\n\n---\n## SEENS Plugins Available\n' +
+      plugins.map(p => `- ${p.name}: ${p.description ?? ''}`).join('\n');
+  }
+
   const args = [
     '-p', userMessage,
     '--output-format', 'json',
     '--json-schema', DJ_SCHEMA,
     '--model', CLAUDE_MODEL,
+    '--append-system-prompt', appendPrompt,
   ];
 
-  // Inject fresh context as appended system prompt
-  let appendPrompt = systemPrompt;
-  if (skills?.length) {
-    appendPrompt += '\n\n---\n## Skills Available\n' + skills.join('\n\n');
-  }
-  args.push('--append-system-prompt', appendPrompt);
-
-  // Resume existing session (persistent memory via Claude Code session system)
+  // Resume existing session — claude Code session system manages all memory
   if (claudeSessionId) {
     args.push('--resume', claudeSessionId);
     log(`Resuming session ${claudeSessionId}`);
   }
 
-  // MCP tools
-  if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
-    args.push('--mcp-config', mcpConfigPath);
-  }
-
-  // NOTE: --no-session-persistence intentionally removed — claude manages memory
-  const raw = await runCLI(CLAUDE_BIN, args);
+  // NOTE: --no-session-persistence intentionally absent — session is persistent
+  // NOTE: --mcp-config intentionally absent — claude auto-loads from cwd + ~/.claude/
+  const raw = await runCLI(CLAUDE_BIN, args, PROJECT_ROOT);
   const { result, sessionId } = parseClaude(raw);
 
   // Capture/update session ID for next turn
@@ -179,12 +188,16 @@ function parseClaude(raw) {
 
 // ─── Backend: Codex ───────────────────────────────────────────────────────────
 
-async function generateCodex(systemPrompt, userMessage) {
+async function generateCodex(systemPrompt, userMessage, plugins) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not set');
 
-  // Build system message from current context (replaces/updates system turn)
-  const sysMsg = { role: 'system', content: systemPrompt + '\n' + CODEX_JSON_INSTRUCTION };
+  let sysContent = systemPrompt;
+  if (plugins?.length) {
+    sysContent += '\n\n---\n## SEENS Plugins Available\n' +
+      plugins.map(p => `- ${p.name}: ${p.description ?? ''}`).join('\n');
+  }
+  const sysMsg = { role: 'system', content: sysContent + '\n' + CODEX_JSON_INSTRUCTION };
 
   // Keep system message + last 40 turns to stay within context limits
   const history = codexMessages.slice(-40);
@@ -252,9 +265,9 @@ function parseJSON(text) {
 
 // ─── CLI runner ───────────────────────────────────────────────────────────────
 
-function runCLI(bin, args) {
+function runCLI(bin, args, cwd = undefined) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args, { env: process.env });
+    const proc = spawn(bin, args, { env: process.env, ...(cwd ? { cwd } : {}) });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => stdout += d);
     proc.stderr.on('data', d => stderr += d);
@@ -273,13 +286,13 @@ async function dispatch(method, params) {
   switch (method) {
 
     case 'generate': {
-      const { systemPrompt, userMessage, mcpConfigPath, skills } = params;
+      const { systemPrompt, userMessage, plugins } = params;
       log(`generate via ${BACKEND} (sessionId=${claudeSessionId ?? 'none'})`);
 
       if (BACKEND === 'claude') {
-        return generateClaude(systemPrompt, userMessage, mcpConfigPath, skills);
+        return generateClaude(systemPrompt, userMessage, plugins);
       } else {
-        return generateCodex(systemPrompt, userMessage);
+        return generateCodex(systemPrompt, userMessage, plugins);
       }
     }
 

@@ -1,4 +1,5 @@
 import { generate, getActiveAgentName } from './ai/index.js';
+import { rerank, isRerankerEnabled } from './reranker.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
 import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setSessionContext, setSessionStart } from './state.js';
@@ -272,6 +273,45 @@ export async function handleInput(input, triggerType = 'user-chat') {
   if (djResponse.sessionContext) {
     setSessionContext(djResponse.sessionContext);
     broadcast('session-context', { context: djResponse.sessionContext });
+  }
+
+  // ── Reranker pass (optional) ────────────────────────────────────────────────
+  // Only runs when reranker module is enabled AND reachable AND DJ has music tracks.
+  // Plugin tracks (audioUrl already resolved) are skipped — no point reranking.
+  const hasMusicCandidates = djResponse.play?.length > 0 && !djResponse.pluginAction;
+  if (hasMusicCandidates && isRerankerEnabled()) {
+    try {
+      const ranked = await rerank(djResponse.play);
+      if (ranked?.length) {
+        console.log(`[Router:${triggerType}] ${ts()} reranker done — top: "${ranked[0]?.title}" by ${ranked[0]?.artist}`);
+
+        // Pass 2: tell the DJ the exact reranked tracks so its intro matches what will play.
+        // This is a lightweight follow-up in the same persistent agent session.
+        const rankedList = ranked
+          .map((t, i) => `${i + 1}. "${t.title}" by ${t.artist}`)
+          .join('\n');
+        const pass2Msg = `The music reranker has selected and ordered your playlist. ` +
+          `These are the exact tracks that will play:\n${rankedList}\n\n` +
+          `Generate your spoken DJ introduction for these specific songs. ` +
+          `Keep the same mood and style. Respond with only the JSON object.`;
+
+        try {
+          const pass2 = await generate(systemPrompt, pass2Msg);
+          if (pass2?.say) {
+            djResponse = { ...djResponse, play: ranked, say: pass2.say };
+            console.log(`[Router:${triggerType}] ${ts()} pass-2 intro: "${pass2.say.slice(0, 100)}"`);
+          } else {
+            djResponse = { ...djResponse, play: ranked };
+          }
+        } catch (err) {
+          // Pass-2 failed — keep pass-1 intro, use reranked order
+          console.warn(`[Router:${triggerType}] pass-2 intro failed:`, err.message);
+          djResponse = { ...djResponse, play: ranked };
+        }
+      }
+    } catch (err) {
+      console.warn(`[Router:${triggerType}] reranker skipped:`, err.message);
+    }
   }
 
   // Note: finalSay may be corrected after resolve — message stored after resolve step
