@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getPref, setPref, clearQueue, setSessionStart, getSessionContext } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgentName, agentStatus, agentReset } from '../src/ai/index.js';
+import { isRerankerEnabled, enableReranker, disableReranker, isSubprocessRunning, getHealth as getRerankerHealth } from '../src/reranker.js';
 import { ensureUserDir, userPath, readUserFile } from '../src/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -124,24 +125,23 @@ router.post('/agent/reset', async (req, res) => {
   }
 });
 
-// GET /api/settings/reranker — reranker enabled state + health
+// GET /api/settings/reranker — enabled state + subprocess/health status
 router.get('/reranker', async (req, res) => {
-  const enabled = getPref('reranker.enabled', '0') === '1';
-  let health = null;
-  if (enabled) {
-    try {
-      const r = await fetch('http://127.0.0.1:7480/api/health', { signal: AbortSignal.timeout(2000) });
-      health = r.ok ? await r.json() : null;
-    } catch { health = null; }
-  }
-  res.json({ enabled, reachable: !!health, health });
+  const enabled = isRerankerEnabled();
+  const running = isSubprocessRunning();
+  const health  = enabled ? await getRerankerHealth() : null;
+  res.json({ enabled, running, reachable: !!health, health });
 });
 
-// POST /api/settings/reranker — enable or disable
-router.post('/reranker', (req, res) => {
+// POST /api/settings/reranker — enable (spawns subprocess) or disable (kills it)
+router.post('/reranker', async (req, res) => {
   const { enabled } = req.body;
-  setPref('reranker.enabled', enabled ? '1' : '0');
-  res.json({ enabled: !!enabled });
+  if (enabled) {
+    enableReranker();
+  } else {
+    await disableReranker();
+  }
+  res.json({ enabled: !!enabled, running: isSubprocessRunning() });
 });
 
 // GET /api/settings/auth-status — which music services are connected

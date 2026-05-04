@@ -14,6 +14,31 @@ const fs    = require('fs');
 const { execFileSync } = require('child_process');
 const { pathToFileURL } = require('url');
 
+// In a packaged Electron app stdout/stderr have no terminal — writes throw EPIPE.
+// Suppress it at the stream level so it never becomes an uncaught exception.
+process.stdout.on('error', e => { if (e.code !== 'EPIPE') throw e; });
+process.stderr.on('error', e => { if (e.code !== 'EPIPE') throw e; });
+
+// Enforce single instance — if a second copy is launched, focus the existing
+// window and quit the new process immediately.  Without this the EADDRINUSE
+// handler lets a second instance attach to the running server and open a
+// duplicate window.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  // Second instance — hide from Dock immediately so there's no visual flash,
+  // then quit.  The first instance's second-instance handler will focus its window.
+  if (app.dock) app.dock.hide();
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (isWindowAlive(mainWindow)) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 // Redirect console output to /tmp/seens-debug.log so issues are always capturable.
 // Append across launches so context is preserved; rotate when file exceeds 2 MB.
 const LOG_PATH = '/tmp/seens-debug.log';
@@ -34,9 +59,10 @@ try {
     }).join(' ') + '\n';
     logStream.write(line);
   };
-  console.log   = (...a) => { origLog(...a);  writeLine('', a); };
-  console.warn  = (...a) => { origWarn(...a); writeLine('[WARN] ', a); };
-  console.error = (...a) => { origErr(...a);  writeLine('[ERR] ', a); };
+  // Wrap origLog/Warn/Err in try-catch: packaged app stdout may be a broken pipe.
+  console.log   = (...a) => { try { origLog(...a); } catch (e) { if (e.code !== 'EPIPE') throw e; } writeLine('', a); };
+  console.warn  = (...a) => { try { origWarn(...a); } catch (e) { if (e.code !== 'EPIPE') throw e; } writeLine('[WARN] ', a); };
+  console.error = (...a) => { try { origErr(...a); } catch (e) { if (e.code !== 'EPIPE') throw e; } writeLine('[ERR] ', a); };
 } catch (e) { /* log redirect failed — continue silently */ }
 
 // Disable Chromium's autoplay policy so DJ audio and music play without a

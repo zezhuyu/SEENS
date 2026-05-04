@@ -689,6 +689,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [apiKeysOpen, setApiKeysOpen]               = useState(false);
   const [manifestDraft, setManifestDraft]           = useState('');
   const [manifestState, setManifestState]           = useState('idle');
+  const [reranker, setReranker]                     = useState(null);  // { enabled, running, reachable }
 
   useEffect(() => {
     if (!open) return;
@@ -703,7 +704,8 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       fetch('/api/settings/mood-rules').then(r => r.ok ? r.json() : {}),
       fetch('/api/settings/taste').then(r => r.ok ? r.json() : {}),
       fetch('/api/settings/env-keys').then(r => r.ok ? r.json() : {}),
-    ]).then(([settingsRes, authRes, prefsRes, storyRes, pluginsRes, connectorsRes, routinesRes, moodRes, tasteRes, envKeysRes]) => {
+      fetch('/api/settings/reranker').then(r => r.ok ? r.json() : {}),
+    ]).then(([settingsRes, authRes, prefsRes, storyRes, pluginsRes, connectorsRes, routinesRes, moodRes, tasteRes, envKeysRes, rerankerRes]) => {
       const settings = settingsRes.status === 'fulfilled' ? settingsRes.value : {};
       const authStatus = authRes.status === 'fulfilled' ? authRes.value : {};
       const restPrefs = prefsRes.status === 'fulfilled' ? prefsRes.value : { content: '' };
@@ -723,6 +725,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       setPlugins(pluginsRes.status === 'fulfilled' ? pluginsRes.value : []);
       setMusicConnectors(connectorsRes.status === 'fulfilled' ? connectorsRes.value : []);
       setApiKeys(envKeysRes.status === 'fulfilled' ? envKeysRes.value : {});
+      setReranker(rerankerRes.status === 'fulfilled' ? rerankerRes.value : null);
     });
   }, [open]);
 
@@ -1129,6 +1132,29 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
                 <button key={a} className={s.agent===a?'active':''} onClick={() => save({ agent: a })}>{a}</button>
               ))}
             </div>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-label">Reranker</div>
+            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
+              <input type="checkbox"
+                checked={reranker?.enabled ?? false}
+                onChange={e => {
+                  const enabled = e.target.checked;
+                  setReranker(r => ({ ...r, enabled, running: false }));
+                  fetch('/api/settings/reranker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                  }).then(r => r.json()).then(d => setReranker(r => ({ ...r, ...d })));
+                }}
+                style={{ accentColor:'var(--accent)', width:14, height:14 }}/>
+              <span style={{ fontSize:12, color:'var(--ink-2)' }}>
+                {reranker?.enabled
+                  ? (reranker?.running ? '● subprocess running' : '○ starting…')
+                  : 'AI reranker (seens-reranker)'}
+              </span>
+            </label>
           </div>
 
           <div className="settings-row">

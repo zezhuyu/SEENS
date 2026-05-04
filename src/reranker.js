@@ -1,92 +1,174 @@
 /**
  * Optional reranker bridge for seens-radio.
  *
- * The reranker (seens-reranker module) is a completely separate component.
- * seens-radio works fully without it — this module simply bypasses gracefully
- * when the reranker is disabled or its server is not running.
+ * When the reranker is enabled via the UI, this module spawns
+ * subprocess_main.py from the seens-reranker repo and communicates
+ * with it over JSON-RPC on stdin/stdout — no separate server needed.
  *
- * When enabled and reachable:
- *   1. DJ generates candidate tracks  (pass 1 — existing behaviour)
- *   2. Candidates sent here for reranking
- *   3. Reranked list returned to router
- *   4. Router sends reranked list back to DJ for final intro (pass 2)
+ * The HTTP API path (RERANKER_URL) is kept as a fallback for when the
+ * standalone server is already running externally.
  *
- * Enable via Settings → "Music Reranker" toggle or:
- *   POST /api/settings  { key: 'reranker.enabled', value: '1' }
+ * Script path resolution order:
+ *   1. RERANKER_SCRIPT env var
+ *   2. reranker.script pref (set via settings UI)
+ *   3. ../seens-reranker/subprocess_main.py  (sibling repo default)
  */
 
-import { getPref }  from './state.js';
+import { spawn }          from 'child_process';
+import readline           from 'readline';
+import path               from 'path';
+import { fileURLToPath }  from 'url';
+import { getPref, setPref } from './state.js';
 import { getWeatherContext } from './weather.js';
 
-const RERANKER_URL     = process.env.RERANKER_URL ?? 'http://127.0.0.1:7480';
-const CONNECT_TIMEOUT  = 3_000;   // ms — fast fail so the DJ isn't blocked
-const RERANK_TIMEOUT   = 10_000;
+const ROOT          = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const DEFAULT_SCRIPT = path.join(ROOT, 'seens-reranker', 'subprocess_main.py');
+const RERANKER_URL  = process.env.RERANKER_URL ?? 'http://127.0.0.1:7480';
+const CONNECT_TIMEOUT = 3_000;
+const RERANK_TIMEOUT  = 30_000;   // model inference can be slow on first call
 
-// Track reachability to avoid hammering a down server every request
-let _reachable  = null;   // null = unknown, true/false = known
-let _lastProbe  = 0;
-const PROBE_TTL = 30_000; // re-probe every 30 s
+// ─── Subprocess state ─────────────────────────────────────────────────────────
+
+let _proc      = null;
+let _rl        = null;
+let _pending   = new Map();   // id → { resolve, reject }
+let _idCounter = 0;
+
+function _scriptPath() {
+  return process.env.RERANKER_SCRIPT
+      ?? getPref('reranker.script', null)
+      ?? DEFAULT_SCRIPT;
+}
+
+function _spawnSubprocess() {
+  const script = _scriptPath();
+  console.log(`[Reranker] spawning subprocess: python3 ${script}`);
+  _proc = spawn('python3', [script], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+    env: { ...process.env },
+  });
+
+  _proc.on('error', err => {
+    console.error('[Reranker] subprocess error:', err.message);
+    _proc = null;
+  });
+
+  _proc.on('exit', (code, signal) => {
+    console.warn(`[Reranker] subprocess exited (code=${code} signal=${signal})`);
+    _proc = null;
+    _rl   = null;
+    // Reject any in-flight calls
+    for (const [, { reject }] of _pending) reject(new Error('Reranker subprocess exited'));
+    _pending.clear();
+  });
+
+  _rl = readline.createInterface({ input: _proc.stdout, terminal: false });
+  _rl.on('line', line => {
+    let msg;
+    try { msg = JSON.parse(line); } catch { return; }
+    const cb = _pending.get(String(msg.id));
+    if (!cb) return;
+    _pending.delete(String(msg.id));
+    msg.error ? cb.reject(new Error(msg.error)) : cb.resolve(msg.result);
+  });
+}
+
+function _call(method, params, timeoutMs = RERANK_TIMEOUT) {
+  return new Promise((resolve, reject) => {
+    if (!_proc) return reject(new Error('Reranker subprocess not running'));
+    const id = String(++_idCounter);
+    const timer = setTimeout(() => {
+      _pending.delete(id);
+      reject(new Error(`Reranker ${method} timeout`));
+    }, timeoutMs);
+    _pending.set(id, {
+      resolve: v => { clearTimeout(timer); resolve(v); },
+      reject:  e => { clearTimeout(timer); reject(e); },
+    });
+    _proc.stdin.write(JSON.stringify({ id, method, params }) + '\n');
+  });
+}
+
+// ─── Public lifecycle ─────────────────────────────────────────────────────────
 
 export function isRerankerEnabled() {
   return getPref('reranker.enabled', '0') === '1';
 }
 
-async function probe() {
-  if (Date.now() - _lastProbe < PROBE_TTL && _reachable !== null) return _reachable;
-  _lastProbe = Date.now();
-  try {
-    const res = await fetch(`${RERANKER_URL}/api/health`, {
-      signal: AbortSignal.timeout(CONNECT_TIMEOUT),
-    });
-    _reachable = res.ok;
-  } catch {
-    _reachable = false;
-  }
-  return _reachable;
+export function isSubprocessRunning() {
+  return _proc !== null && !_proc.killed;
 }
 
 /**
+ * Enable the reranker — spawns the subprocess if not already running.
+ * Called by POST /api/settings/reranker { enabled: true }.
+ */
+export function enableReranker() {
+  setPref('reranker.enabled', '1');
+  if (!isSubprocessRunning()) {
+    try {
+      _spawnSubprocess();
+    } catch (err) {
+      console.error('[Reranker] failed to spawn subprocess:', err.message);
+    }
+  }
+}
+
+/**
+ * Disable the reranker — shuts down the subprocess.
+ * Called by POST /api/settings/reranker { enabled: false }.
+ */
+export async function disableReranker() {
+  setPref('reranker.enabled', '0');
+  if (isSubprocessRunning()) {
+    try { await _call('shutdown', {}, 3_000); } catch { /* ignore */ }
+    try { _proc.kill(); } catch { /* ignore */ }
+    _proc = null;
+    _rl   = null;
+  }
+}
+
+// ─── Core rerank call ─────────────────────────────────────────────────────────
+
+/**
  * Rerank a list of candidate tracks.
+ * Uses the subprocess when running, falls back to HTTP API if not.
  *
- * @param {Array<{title,artist,source,uri?}>} candidates  — from djResponse.play
- * @param {object} contextOverrides  — optional: { mood, energy, weather_code, has_event }
- * @returns {Array|null}  ranked candidates (same shape) or null if reranker unavailable
+ * @param {Array<{title,artist,source,uri?}>} candidates
+ * @param {object} contextOverrides — { mood, energy, weather_code, has_event }
+ * @returns {Array|null}  ranked candidates or null if unavailable
  */
 export async function rerank(candidates, contextOverrides = {}) {
-  if (!candidates?.length) return null;
-  if (!isRerankerEnabled()) return null;
-  if (!await probe()) return null;
+  if (!candidates?.length || !isRerankerEnabled()) return null;
 
-  // Build context — pull weather signal if available
-  let weather_code = contextOverrides.weather_code ?? null;
-  if (weather_code === null) {
-    try {
-      const wRaw = await getWeatherContext();
-      const codeMatch = wRaw?.match(/\b(\d{1,3})\b/);
-      if (codeMatch) weather_code = parseInt(codeMatch[1]);
-    } catch { /* non-critical */ }
-  }
-
-  const now = new Date();
-  const context = {
-    time_of_day:  now.getHours() / 24,
-    day_of_week:  now.getDay()   / 6,
-    weather_code,
-    mood:      contextOverrides.mood      ?? null,
-    energy:    contextOverrides.energy    ?? null,
-    has_event: contextOverrides.has_event ?? false,
-  };
-
-  // Map DJ track shape to reranker song shape
-  const songs = candidates.map(t => ({
+  const context = await _buildContext(contextOverrides);
+  const songs   = candidates.map(t => ({
     id:     t.uri ?? `${t.title}___${t.artist}`,
     title:  t.title,
     artist: t.artist ?? '',
     source: t.source ?? 'any',
-    // lyrics fallback so BGE can still embed without audio
     lyrics: `${t.title} ${t.artist}`,
   }));
 
+  // ── Subprocess path (preferred) ─────────────────────────────────────────────
+  if (isSubprocessRunning()) {
+    try {
+      const result = await _call('rerank', {
+        candidates: songs,
+        context,
+        top_k: songs.length,
+      });
+      return _mapBack(result?.songs ?? result, candidates);
+    } catch (err) {
+      console.warn('[Reranker] subprocess call failed:', err.message, '— trying HTTP');
+    }
+  }
+
+  // ── HTTP fallback (standalone API server) ───────────────────────────────────
+  return _rerankHttp(songs, context, candidates);
+}
+
+async function _rerankHttp(songs, context, candidates) {
   try {
     const res = await fetch(`${RERANKER_URL}/api/rerank`, {
       method:  'POST',
@@ -94,38 +176,75 @@ export async function rerank(candidates, contextOverrides = {}) {
       body:    JSON.stringify({ candidates: songs, context, top_k: songs.length }),
       signal:  AbortSignal.timeout(RERANK_TIMEOUT),
     });
-
-    if (!res.ok) {
-      console.warn('[Reranker] HTTP', res.status, '— bypassing');
-      return null;
-    }
-
+    if (!res.ok) { console.warn('[Reranker] HTTP', res.status); return null; }
     const { songs: ranked } = await res.json();
-
-    // Map back to DJ track shape, preserving original fields
-    const idMap = new Map(candidates.map(t => [t.uri ?? `${t.title}___${t.artist}`, t]));
-    return ranked.map(r => {
-      const orig = idMap.get(r.id) ?? { title: r.title, artist: r.artist, source: 'any' };
-      return { ...orig, reranker_score: r.reranker_score, attention_weights: r.attention_weights };
-    });
+    return _mapBack(ranked, candidates);
   } catch (err) {
-    console.warn('[Reranker] request failed:', err.message, '— bypassing');
-    _reachable = false;  // force re-probe next cycle
-    _lastProbe = Date.now();
+    console.warn('[Reranker] HTTP failed:', err.message, '— bypassing');
     return null;
   }
 }
 
-/**
- * Send playback feedback to the reranker (fire-and-forget).
- * Called by routes/feedback.js when user likes/skips a track.
- */
-export async function sendFeedback(songId, event, context = null) {
-  if (!isRerankerEnabled() || !await probe()) return;
+function _mapBack(ranked, candidates) {
+  if (!ranked?.length) return null;
+  const idMap = new Map(candidates.map(t => [t.uri ?? `${t.title}___${t.artist}`, t]));
+  return ranked.map(r => {
+    const orig = idMap.get(r.id) ?? { title: r.title, artist: r.artist, source: 'any' };
+    return { ...orig, reranker_score: r.reranker_score, attention_weights: r.attention_weights };
+  });
+}
+
+async function _buildContext(overrides = {}) {
+  let weather_code = overrides.weather_code ?? null;
+  if (weather_code === null) {
+    try {
+      const wRaw = await getWeatherContext();
+      const m = wRaw?.match(/\b(\d{1,3})\b/);
+      if (m) weather_code = parseInt(m[1]);
+    } catch { /* non-critical */ }
+  }
+  const now = new Date();
+  return {
+    time_of_day:  now.getHours() / 24,
+    day_of_week:  now.getDay()   / 6,
+    weather_code,
+    mood:      overrides.mood      ?? null,
+    energy:    overrides.energy    ?? null,
+    has_event: overrides.has_event ?? false,
+  };
+}
+
+// ─── Health check ─────────────────────────────────────────────────────────────
+
+export async function getHealth() {
+  if (isSubprocessRunning()) {
+    try {
+      const h = await _call('health', {}, CONNECT_TIMEOUT);
+      return { source: 'subprocess', ...h };
+    } catch { /* fall through */ }
+  }
+  // Try HTTP
+  try {
+    const res = await fetch(`${RERANKER_URL}/api/health`, {
+      signal: AbortSignal.timeout(CONNECT_TIMEOUT),
+    });
+    if (res.ok) return { source: 'http', ...(await res.json()) };
+  } catch { /* unreachable */ }
+  return null;
+}
+
+// ─── Feedback (fire-and-forget) ───────────────────────────────────────────────
+
+export function sendFeedback(songId, event, context = null) {
+  if (!isRerankerEnabled()) return;
+  if (isSubprocessRunning()) {
+    _call('feedback', { song_id: songId, event, context }, 3_000).catch(() => {});
+    return;
+  }
   fetch(`${RERANKER_URL}/api/feedback`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ song_id: songId, event, context }),
     signal:  AbortSignal.timeout(3_000),
-  }).catch(() => { /* non-critical */ });
+  }).catch(() => {});
 }

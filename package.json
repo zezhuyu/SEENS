@@ -15,7 +15,7 @@
     "electron:dev": "NODE_ENV=development electron electron/main.cjs",
     "rebuild:node": "npm rebuild better-sqlite3",
     "rebuild:electron": "npx electron-rebuild -v 33.4.11 --only better-sqlite3,fsevents,iconv-corefoundation",
-    "dist": "SKIP_MAC_NOTARIZE=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c.mac.forceCodeSigning=false -c.mac.identity=null && node scripts/install-sqlite3-prebuilt.cjs \"dist/mac-arm64/Seens Radio.app/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node\" && node scripts/post-sign-macos-local.cjs",
+    "dist": "SKIP_MAC_NOTARIZE=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64 -c.mac.forceCodeSigning=false -c.mac.identity=null && node scripts/install-sqlite3-prebuilt.cjs \"dist/mac-arm64/Seens Radio.app/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node\" && node scripts/post-sign-macos-local.cjs",
     "update-app": "node scripts/update-app-asar.cjs"
   },
   "dependencies": {
