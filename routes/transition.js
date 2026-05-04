@@ -24,7 +24,7 @@ router.post('/', async (req, res) => {
 
     console.log(`[Transition] generating intro for "${nextTitle}" by ${nextArtist}`);
 
-    const systemPrompt = await buildSystemPrompt('transition');
+    const systemPrompt = await buildSystemPrompt('transition', { agentMode: true });
     const userMsg = `You are between songs. Introduce the next track in 1-2 sentences: "${nextTitle}" by ${nextArtist}. Be warm, specific, and DJ-like. Respond only with the JSON object — no extra text.`;
 
     let say;

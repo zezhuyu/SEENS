@@ -205,6 +205,12 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
     process.env.PORT = String(actualPort);
     console.log(`\n🎙  Seens Radio running at http://localhost:${actualPort}\n`);
 
+    // Start the long-running AI agent subprocess — must be first so all
+    // subsequent generate() calls route to the persistent session.
+    import('./src/ai/AgentClient.js').then(({ agent }) => {
+      agent.start().catch(err => console.error('[Server] AI agent failed to start:', err.message));
+    });
+
     // Start scheduler after server is up
     import('./src/scheduler.js').then(({ startScheduler }) => startScheduler());
 

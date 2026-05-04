@@ -1,32 +1,50 @@
 /**
- * AI Agent factory — switch between Claude and Codex at runtime.
+ * AI entry point.
  *
- * Active agent is determined by:
- *   1. state.db prefs key "ai.agent"  (runtime override via POST /api/settings/agent)
- *   2. AI_AGENT env var               (startup default)
- *   3. Fallback: "claude"
+ * Routes all generate() calls through the long-running AgentProcess.
+ * The agent owns all conversation memory — nothing is stored in the SEENS app
+ * beyond USER/ (taste, routines, mood-rules).
  *
- * Both agents expose the same interface:
- *   generate(systemPrompt: string, userMessage: string)
- *     → Promise<{ say, play: [{title, artist, source}], reason, segue }>
+ * The backend (claude | codex) is chosen by the AgentProcess based on
+ * AI_AGENT env var or the ai.agent pref stored in state.db.
+ *
+ * The old per-request claude.js / codex.js modules are preserved as
+ * fallback adapters and for direct testing.
  */
 
-import * as claude from './claude.js';
-import * as codex from './codex.js';
-import { getPref } from '../state.js';
+import { agent }    from './AgentClient.js';
+import * as claude  from './claude.js';
+import * as codex   from './codex.js';
+import { getPref }  from '../state.js';
 
-const AGENTS = { claude, codex };
+export const AGENT_NAMES = ['claude', 'codex'];
 
-export const AGENT_NAMES = Object.keys(AGENTS);
-
-export function getActiveAgent() {
-  const name = getPref('ai.agent', null) ?? process.env.AI_AGENT ?? 'claude';
-  const key = name.toLowerCase();
-  if (!AGENTS[key]) throw new Error(`Unknown AI agent: "${name}". Valid: ${AGENT_NAMES.join(', ')}`);
-  return { name: key, agent: AGENTS[key] };
+export function getActiveAgentName() {
+  return (getPref('ai.agent', null) ?? process.env.AI_AGENT ?? 'claude').toLowerCase();
 }
 
+/**
+ * Primary generate() — routes through the always-on agent process.
+ * Falls back to direct stateless call if agent is not ready.
+ */
 export async function generate(systemPrompt, userMessage) {
-  const { agent } = getActiveAgent();
-  return agent.generate(systemPrompt, userMessage);
+  try {
+    return await agent.generate(systemPrompt, userMessage);
+  } catch (err) {
+    console.warn('[AI] AgentClient failed, falling back to direct call:', err.message);
+    const name = getActiveAgentName();
+    const backend = name === 'codex' ? codex : claude;
+    return backend.generate(systemPrompt, userMessage);
+  }
+}
+
+/**
+ * Agent control helpers — used by /api/settings and test scripts.
+ */
+export async function agentStatus() {
+  return agent.status();
+}
+
+export async function agentReset() {
+  return agent.reset();
 }

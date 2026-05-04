@@ -1,4 +1,4 @@
-import { generate, getActiveAgent } from './ai/index.js';
+import { generate, getActiveAgentName } from './ai/index.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
 import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setSessionContext, setSessionStart } from './state.js';
@@ -56,8 +56,8 @@ export async function handleInput(input, triggerType = 'user-chat') {
 
   // AI-powered response
   addMessage('user', trimmed);
-  const systemPrompt = await buildSystemPrompt(triggerType);
-  const { name: agentName } = getActiveAgent();
+  const systemPrompt = await buildSystemPrompt(triggerType, { agentMode: true });
+  const agentName = getActiveAgentName();
   console.log(`[Router:${triggerType}] start → AI call (${agentName})`);
 
   let djResponse;

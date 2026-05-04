@@ -42,7 +42,7 @@ async function getCalendarContext() {
 }
 
 // Assemble the system prompt sent to the active AI agent
-export async function buildSystemPrompt(triggerType = 'user-chat') {
+export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode = false } = {}) {
   // Fragment 1 — DJ Persona
   const persona = readFile('prompts/dj-persona.md');
 
@@ -96,7 +96,8 @@ export async function buildSystemPrompt(triggerType = 'user-chat') {
     ? `UP NEXT (queued in this order — these will play after the current song):\n${upNextTracks.map((t, i) => `${i + 1}. "${t.title}"${t.artist ? ` by ${t.artist}` : ''}`).join('\n')}`
     : null;
 
-  const messages = getSessionMessages(30);
+  // In agentMode the long-running agent owns conversation memory — skip injecting it here.
+  const messages = agentMode ? [] : getSessionMessages(30);
   const memory = [
     recentHistory.length ? `Recently finished (already played, do not re-suggest):\n${recentHistory.map(p => `- "${p.title}" by ${p.artist ?? 'unknown'}`).join('\n')}` : '',
     messages.length ? `This session's conversation (mood instructions set here carry through the whole session):\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}` : '',

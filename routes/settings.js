@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getPref, setPref, clearQueue, setSessionStart, getSessionContext } from '../src/state.js';
-import { AGENT_NAMES, getActiveAgent } from '../src/ai/index.js';
+import { AGENT_NAMES, getActiveAgentName, agentStatus, agentReset } from '../src/ai/index.js';
 import { ensureUserDir, userPath, readUserFile } from '../src/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -93,10 +93,15 @@ router.post('/', (req, res) => {
   res.json({ ok: true });
 });
 
-// GET /api/settings/agent — current active agent
-router.get('/agent', (req, res) => {
-  const { name } = getActiveAgent();
-  res.json({ agent: name, available: AGENT_NAMES });
+// GET /api/settings/agent — current active agent + live process status
+router.get('/agent', async (req, res) => {
+  const name = getActiveAgentName();
+  try {
+    const status = await agentStatus();
+    res.json({ agent: name, available: AGENT_NAMES, process: status });
+  } catch {
+    res.json({ agent: name, available: AGENT_NAMES, process: null });
+  }
 });
 
 // POST /api/settings/agent — switch agent at runtime
@@ -107,6 +112,16 @@ router.post('/agent', (req, res) => {
   }
   setPref('ai.agent', agent.toLowerCase());
   res.json({ agent: agent.toLowerCase() });
+});
+
+// POST /api/settings/agent/reset — clear agent memory and start fresh session
+router.post('/agent/reset', async (req, res) => {
+  try {
+    await agentReset();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/settings/auth-status — which music services are connected
