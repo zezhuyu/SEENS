@@ -26,7 +26,7 @@
  *   reset      {} → { ok } — clears this session's memory
  */
 
-import { spawn }      from 'child_process';
+import { spawn, execSync } from 'child_process';
 import fs             from 'fs';
 import path           from 'path';
 import os             from 'os';
@@ -412,9 +412,24 @@ function log(msg) {
   process.stderr.write(`[AgentProcess] ${msg}\n`);
 }
 
+function resolvedBinPath(bin) {
+  try { return execSync(`which ${bin}`, { encoding: 'utf8' }).trim(); }
+  catch { return `${bin} (not found in PATH)`; }
+}
+
 async function main() {
   loadState();
+
+  // Log the actual filesystem path of each CLI so it's clear no remote API is used.
+  const activeBin  = BACKEND === 'claude' ? CLAUDE_BIN : CODEX_BIN;
+  const resolvedPath = resolvedBinPath(activeBin);
   log(`Started. backend=${BACKEND} pid=${process.pid}`);
+  log(`CLI binary: ${activeBin} → ${resolvedPath} (local process — no remote API)`);
+  if (BACKEND === 'claude') {
+    log(`Claude model: ${CLAUDE_MODEL}`);
+  } else if (CODEX_MODEL) {
+    log(`Codex model override: ${CODEX_MODEL}`);
+  }
 
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
 
