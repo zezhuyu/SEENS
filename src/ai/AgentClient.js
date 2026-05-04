@@ -126,6 +126,11 @@ class AgentClient {
     return this._call('reset', {});
   }
 
+  /** True only when the subprocess is alive and responded to the first ping. */
+  isActive() {
+    return this._ready && !!this._proc;
+  }
+
   // ── internals ───────────────────────────────────────────────────────────────
 
   async _call(method, params) {

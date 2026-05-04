@@ -48,3 +48,8 @@ export async function agentStatus() {
 export async function agentReset() {
   return agent.reset();
 }
+
+/** True when the persistent agent subprocess is alive and ready. */
+export function isAgentActive() {
+  return agent.isActive();
+}

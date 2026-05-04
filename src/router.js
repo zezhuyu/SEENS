@@ -1,4 +1,4 @@
-import { generate, getActiveAgentName } from './ai/index.js';
+import { generate, getActiveAgentName, isAgentActive } from './ai/index.js';
 import { rerank, isRerankerEnabled } from './reranker.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
@@ -56,8 +56,13 @@ export async function handleInput(input, triggerType = 'user-chat') {
   }
 
   // AI-powered response
-  addMessage('user', trimmed);
-  const systemPrompt = await buildSystemPrompt(triggerType, { agentMode: true });
+  // When the long-running agent is active it manages all conversation memory itself
+  // (in ~/.seens/agent/ via Claude session or Codex messages array).
+  // Writing to state.db here would duplicate memory in the wrong place.
+  const agentActive = isAgentActive();
+  if (!agentActive) addMessage('user', trimmed);
+
+  const systemPrompt = await buildSystemPrompt(triggerType, { agentMode: agentActive });
   const agentName = getActiveAgentName();
   console.log(`[Router:${triggerType}] start → AI call (${agentName})`);
 
@@ -290,10 +295,11 @@ export async function handleInput(input, triggerType = 'user-chat') {
         const rankedList = ranked
           .map((t, i) => `${i + 1}. "${t.title}" by ${t.artist}`)
           .join('\n');
-        const pass2Msg = `The music reranker has selected and ordered your playlist. ` +
-          `These are the exact tracks that will play:\n${rankedList}\n\n` +
-          `Generate your spoken DJ introduction for these specific songs. ` +
-          `Keep the same mood and style. Respond with only the JSON object.`;
+        const pass2Msg =
+          `Here's the confirmed playlist — introduce it to the listener now:\n${rankedList}\n\n` +
+          `You're on air. For the first track, share a real story, recording detail, or lyric ` +
+          `meaning that makes the listener feel like an insider. Lead with the song or the story. ` +
+          `Use segue to tease the next track. Set play to these exact tracks in this exact order.`;
 
         try {
           const pass2 = await generate(systemPrompt, pass2Msg);
@@ -412,7 +418,7 @@ export async function handleInput(input, triggerType = 'user-chat') {
     }
   }
 
-  addMessage('assistant', finalSay);
+  if (!agentActive) addMessage('assistant', finalSay);
   console.log(`[Router:${triggerType}] ${ts()} broadcasting — firstTrack="${firstTrack?.resolvedTitle ?? firstTrack?.title ?? 'none'}" videoId=${firstTrack?.videoId ?? 'null'}`);
 
   broadcast('dj-response', {

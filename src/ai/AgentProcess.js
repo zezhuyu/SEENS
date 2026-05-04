@@ -6,23 +6,23 @@
  * All conversation memory is managed HERE — nothing in the SEENS app.
  *
  * Memory lives at: ~/.seens/agent/
- *   state.json          — session IDs, metadata
- *   codex-messages.json — Codex conversation history
- *   claude-session      — Claude Code session ID (plain text)
+ *   state.json     — session IDs, metadata
+ *   claude-session — Claude Code session ID (plain text)
+ *   codex-session  — Codex CLI thread ID (plain text)
+ *
+ * Both backends use their CLI from PATH — no direct API calls:
+ *   Claude: `claude -p <msg> --resume <session_id> ...`
+ *   Codex:  `codex exec <msg> --json -o <file>` /
+ *           `codex exec resume <thread_id> <msg> --json -o <file>`
  *
  * Protocol: newline-delimited JSON over stdin/stdout
  *   Request:  { id, method, params }
  *   Response: { id, result }  |  { id, error }
  *
  * Methods:
-  *   generate   { systemPrompt, userMessage, plugins? }
+ *   generate   { systemPrompt, userMessage, plugins? }
  *              → { say, play, reason, segue, sessionId? }
- *
- * MCPs and skills are discovered by the agent itself:
- *   Claude CLI auto-loads ~/.claude/settings.json (global MCPs + skills)
- *   and .mcp.json in cwd (project MCPs) — seens-radio does NOT manage these.
- *   seens-radio only sends plugins (USER/plugins.json) so the DJ can use them.
- *   status     {} → { backend, sessionId, messageCount, uptime }
+ *   status     {} → { backend, sessionId, uptimeMs }
  *   reset      {} → { ok } — clears this session's memory
  */
 
@@ -39,8 +39,8 @@ const AGENT_DIR = path.join(os.homedir(), '.seens', 'agent');
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 
 const STATE_FILE   = path.join(AGENT_DIR, 'state.json');
-const CODEX_HIST   = path.join(AGENT_DIR, 'codex-messages.json');
 const CLAUDE_SID   = path.join(AGENT_DIR, 'claude-session');
+const CODEX_SID    = path.join(AGENT_DIR, 'codex-session');
 
 // seens-radio project root — claude CLI auto-loads .mcp.json and
 // ~/.claude/settings.json (global MCPs + skills) from here
@@ -50,44 +50,44 @@ const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 
 const BACKEND      = (process.env.AI_AGENT ?? 'claude').toLowerCase();
 const CLAUDE_BIN   = process.env.CLAUDE_BIN   ?? 'claude';
+const CODEX_BIN    = process.env.CODEX_BIN    ?? 'codex';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5';
-const CODEX_MODEL  = process.env.CODEX_MODEL  ?? 'gpt-4o-mini';
+// CODEX_MODEL: leave unset to use whatever model is in ~/.codex/config.toml
+const CODEX_MODEL  = process.env.CODEX_MODEL  ?? null;
 
 const START_TIME   = Date.now();
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
-let claudeSessionId = null;    // for --resume
-let codexMessages   = [];      // for OpenAI multi-turn
+let claudeSessionId = null;    // for claude --resume
+let codexSessionId  = null;    // for codex exec resume <thread_id>
 
 function loadState() {
-  // Claude session ID
   try {
     claudeSessionId = fs.readFileSync(CLAUDE_SID, 'utf8').trim() || null;
     if (claudeSessionId) log(`Resuming Claude session: ${claudeSessionId}`);
   } catch { /* no prior session */ }
 
-  // Codex message history
   try {
-    const raw = fs.readFileSync(CODEX_HIST, 'utf8');
-    codexMessages = JSON.parse(raw);
-    log(`Loaded ${codexMessages.length} Codex messages from disk`);
-  } catch { codexMessages = []; }
+    codexSessionId = fs.readFileSync(CODEX_SID, 'utf8').trim() || null;
+    if (codexSessionId) log(`Resuming Codex thread: ${codexSessionId}`);
+  } catch { /* no prior session */ }
 }
 
 function saveState() {
   try {
     if (claudeSessionId) fs.writeFileSync(CLAUDE_SID, claudeSessionId, 'utf8');
-    if (BACKEND === 'codex') {
-      fs.writeFileSync(CODEX_HIST, JSON.stringify(codexMessages), 'utf8');
-    }
-    const meta = { backend: BACKEND, claudeSessionId, messageCount: codexMessages.length, savedAt: new Date().toISOString() };
+    if (codexSessionId)  fs.writeFileSync(CODEX_SID,  codexSessionId,  'utf8');
+    const meta = { backend: BACKEND, claudeSessionId, codexSessionId, savedAt: new Date().toISOString() };
     fs.writeFileSync(STATE_FILE, JSON.stringify(meta, null, 2), 'utf8');
   } catch (err) { log('saveState error: ' + err.message); }
 }
 
 // ─── DJ response schema ───────────────────────────────────────────────────────
 
+// ─── DJ response schema ───────────────────────────────────────────────────────
+
+// Claude CLI accepts the schema as inline JSON
 const DJ_SCHEMA = JSON.stringify({
   type: 'object',
   properties: {
@@ -120,11 +120,6 @@ const DJ_SCHEMA = JSON.stringify({
   required: ['say', 'play', 'reason', 'segue'],
 });
 
-const CODEX_JSON_INSTRUCTION = `
-Respond ONLY with a single JSON object (no markdown) matching:
-{"say":"","play":[{"title":"","artist":"","source":"spotify|apple|youtube|any"}],"reason":"","segue":"","pluginCall":null,"pluginAction":null}
-pluginAction.type: "play" (has audio), "rest-piece" (image+text, no audio), "info" (text only).
-Always populate say.`;
 
 // ─── Backend: Claude ──────────────────────────────────────────────────────────
 
@@ -186,55 +181,79 @@ function parseClaude(raw) {
   return { result: normalizeResult(obj, raw), sessionId };
 }
 
-// ─── Backend: Codex ───────────────────────────────────────────────────────────
+// ─── Backend: Codex CLI ───────────────────────────────────────────────────────
+//
+// Uses the local `codex` CLI from PATH — no direct API calls.
+// Session persistence: codex CLI stores conversation history internally and
+// exposes it via thread IDs.  We save the thread_id to ~/.seens/agent/codex-session.
+//
+// Codex doesn't have --append-system-prompt; we prepend the system context to
+// the user message so the DJ persona and taste profile are always in scope.
+
+const CODEX_JSON_INSTRUCTION =
+  '\n\nRespond ONLY with a single JSON object (no markdown fences) matching:\n' +
+  '{"say":"","play":[{"title":"","artist":"","source":"spotify|apple|youtube|any"}],"reason":"","segue":""}\n' +
+  'Always populate say. pluginCall and pluginAction may be omitted.';
 
 async function generateCodex(systemPrompt, userMessage, plugins) {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('OPENAI_API_KEY not set');
-
-  let sysContent = systemPrompt;
+  // Build combined prompt: system context + JSON instruction + user message
+  let context = systemPrompt;
   if (plugins?.length) {
-    sysContent += '\n\n---\n## SEENS Plugins Available\n' +
+    context += '\n\n---\n## SEENS Plugins Available\n' +
       plugins.map(p => `- ${p.name}: ${p.description ?? ''}`).join('\n');
   }
-  const sysMsg = { role: 'system', content: sysContent + '\n' + CODEX_JSON_INSTRUCTION };
+  context += CODEX_JSON_INSTRUCTION;
+  const fullPrompt = `${context}\n\n---\n\n${userMessage}`;
 
-  // Keep system message + last 40 turns to stay within context limits
-  const history = codexMessages.slice(-40);
-  const messages = [sysMsg, ...history, { role: 'user', content: userMessage }];
-
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({
-      model: CODEX_MODEL,
-      response_format: { type: 'json_object' },
-      messages,
-      max_tokens: 1500,
-      temperature: 1.1,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI ${res.status}: ${err.slice(0, 200)}`);
+  let args;
+  if (codexSessionId) {
+    // Resume existing thread — codex CLI manages full conversation history internally
+    args = ['exec', 'resume', codexSessionId, fullPrompt];
+    log(`Resuming Codex thread ${codexSessionId}`);
+  } else {
+    args = ['exec', fullPrompt];
   }
 
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content ?? '';
+  args.push('--json');   // JSONL events on stdout — gives us thread_id + item.completed
+  if (CODEX_MODEL) args.push('-m', CODEX_MODEL);
 
-  // Persist conversation turns in agent memory (not in SEENS)
-  codexMessages.push({ role: 'user', content: userMessage });
-  codexMessages.push({ role: 'assistant', content: text });
-  saveState();
+  // ignoreStdin prevents codex from blocking waiting for piped input
+  const jsonl = await runCLI(CODEX_BIN, args, PROJECT_ROOT, { ignoreStdin: true });
 
-  return normalizeResult(parseJSON(text), text);
+  // Parse JSONL: extract thread_id and final agent message text
+  let threadId = null;
+  let resultText = null;
+  for (const line of jsonl.split('\n')) {
+    let evt;
+    try { evt = JSON.parse(line); } catch { continue; }
+    if (evt.type === 'thread.started' && evt.thread_id) {
+      threadId = evt.thread_id;
+    } else if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
+      resultText = evt.item.text ?? null;
+    }
+  }
+
+  if (threadId && threadId !== codexSessionId) {
+    codexSessionId = threadId;
+    log(`New Codex thread: ${codexSessionId}`);
+    saveState();
+  }
+
+  return normalizeResult(parseJSON(resultText ?? ''), resultText ?? '');
 }
 
 // ─── Normalise ────────────────────────────────────────────────────────────────
 
 function normalizeResult(obj, raw) {
   if (!obj) return { say: raw?.trim() ?? '', play: [], reason: '', segue: '' };
+  // Some models (gpt-5.5) double-wrap: the outer say field contains the real JSON.
+  // Detect this and unwrap before normalizing.
+  if (typeof obj.say === 'string' && obj.say.trimStart().startsWith('{')) {
+    const inner = parseJSON(obj.say);
+    if (inner && typeof inner.say === 'string' && !inner.say.trimStart().startsWith('{')) {
+      obj = inner;
+    }
+  }
   return {
     say:          String(obj.say ?? ''),
     play:         Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
@@ -256,27 +275,89 @@ function normalizeTrack(t) {
 }
 
 function parseJSON(text) {
+  if (!text) return null;
   const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
+
+  // Fast path: well-formed JSON
   try { return JSON.parse(cleaned); } catch { /* */ }
+
+  // Extract the outermost {...} block
   const match = cleaned.match(/\{[\s\S]*\}/);
-  if (match) { try { return JSON.parse(match[0]); } catch { /* */ } }
+  if (!match) return null;
+
+  try { return JSON.parse(match[0]); } catch { /* */ }
+
+  // Repair: LLMs sometimes embed unescaped double-quotes inside JSON strings
+  // (e.g. "say":"He played "Holocene" in a cabin").  Replace `"` that appear
+  // inside a string value with \" using a simple state-machine pass.
+  try { return JSON.parse(repairJson(match[0])); } catch { /* */ }
+
   return null;
+}
+
+function repairJson(s) {
+  let out = '';
+  let inString = false;
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '\\') {
+      // Keep existing escape sequence intact
+      out += ch + (s[i + 1] ?? '');
+      i += 2;
+      continue;
+    }
+    if (ch === '"') {
+      if (!inString) {
+        inString = true;
+        out += ch;
+      } else {
+        // Peek ahead: is the next non-space char a JSON structural token?
+        // If yes → end of string.  If no → embedded quote, escape it.
+        let j = i + 1;
+        while (j < s.length && s[j] === ' ') j++;
+        const next = s[j];
+        if (next === ':' || next === ',' || next === '}' || next === ']' || next === '"') {
+          inString = false;
+          out += ch;
+        } else {
+          out += '\\"';
+        }
+      }
+      i++;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
 }
 
 // ─── CLI runner ───────────────────────────────────────────────────────────────
 
-function runCLI(bin, args, cwd = undefined) {
+function runCLI(bin, args, cwd = undefined, { ignoreStdin = false } = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args, { env: process.env, ...(cwd ? { cwd } : {}) });
+    const stdio = ignoreStdin ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'];
+    const proc = spawn(bin, args, { env: process.env, stdio, ...(cwd ? { cwd } : {}) });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => stdout += d);
     proc.stderr.on('data', d => stderr += d);
     proc.on('close', code => {
-      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 300)}`));
-      else resolve(stdout);
+      if (code !== 0) {
+        // Codex CLI may exit 1 due to session-persistence bookkeeping errors
+        // even when the model response was successfully written to stdout.
+        // Resolve if stdout contains a completed turn; reject otherwise.
+        if (stdout.includes('"turn.completed"') || stdout.includes('"item.completed"')) {
+          resolve(stdout);
+        } else {
+          reject(new Error(`${bin} exited ${code}: ${stderr.slice(0, 300)}`));
+        }
+      } else {
+        resolve(stdout);
+      }
     });
     proc.on('error', reject);
-    setTimeout(() => { proc.kill(); reject(new Error('claude CLI timeout')); }, 90_000);
+    setTimeout(() => { proc.kill(); reject(new Error(`${bin} CLI timeout`)); }, 120_000);
   });
 }
 
@@ -287,7 +368,8 @@ async function dispatch(method, params) {
 
     case 'generate': {
       const { systemPrompt, userMessage, plugins } = params;
-      log(`generate via ${BACKEND} (sessionId=${claudeSessionId ?? 'none'})`);
+      const sid = BACKEND === 'claude' ? claudeSessionId : codexSessionId;
+      log(`generate via ${BACKEND} (sessionId=${sid ?? 'none'})`);
 
       if (BACKEND === 'claude') {
         return generateClaude(systemPrompt, userMessage, plugins);
@@ -297,19 +379,19 @@ async function dispatch(method, params) {
     }
 
     case 'status': {
+      const sessionId = BACKEND === 'claude' ? claudeSessionId : codexSessionId;
       return {
-        backend:      BACKEND,
-        sessionId:    claudeSessionId,
-        messageCount: codexMessages.length,
-        uptimeMs:     Date.now() - START_TIME,
+        backend:   BACKEND,
+        sessionId,
+        uptimeMs:  Date.now() - START_TIME,
       };
     }
 
     case 'reset': {
       claudeSessionId = null;
-      codexMessages   = [];
-      try { fs.unlinkSync(CLAUDE_SID);  } catch { /* */ }
-      try { fs.unlinkSync(CODEX_HIST);  } catch { /* */ }
+      codexSessionId  = null;
+      try { fs.unlinkSync(CLAUDE_SID); } catch { /* */ }
+      try { fs.unlinkSync(CODEX_SID);  } catch { /* */ }
       saveState();
       log('Session reset');
       return { ok: true };
