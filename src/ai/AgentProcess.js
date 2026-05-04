@@ -42,9 +42,27 @@ const STATE_FILE   = path.join(AGENT_DIR, 'state.json');
 const CLAUDE_SID   = path.join(AGENT_DIR, 'claude-session');
 const CODEX_SID    = path.join(AGENT_DIR, 'codex-session');
 
-// seens-radio project root — claude CLI auto-loads .mcp.json and
-// ~/.claude/settings.json (global MCPs + skills) from here
-const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+// Codex requires cwd to be a git repo to get workspace-write sandbox.
+// Without it (read-only sandbox) codex reads from stdin before responding.
+// We maintain a minimal git repo at ~/.seens/codex-workspace for this purpose.
+const CODEX_WORKSPACE = path.join(os.homedir(), '.seens', 'codex-workspace');
+function ensureCodexWorkspace() {
+  fs.mkdirSync(CODEX_WORKSPACE, { recursive: true });
+  if (!fs.existsSync(path.join(CODEX_WORKSPACE, '.git'))) {
+    try {
+      execSync('git init', { cwd: CODEX_WORKSPACE, stdio: 'ignore' });
+      execSync('git config user.email "seens@local"', { cwd: CODEX_WORKSPACE, stdio: 'ignore' });
+      execSync('git config user.name "SEENS"', { cwd: CODEX_WORKSPACE, stdio: 'ignore' });
+    } catch { /* git unavailable — codex may still work */ }
+  }
+}
+ensureCodexWorkspace();
+
+// seens-radio project root (for claude CLI which auto-loads .mcp.json).
+// In a packaged Electron app this resolves inside app.asar (a file, not a dir).
+// Fall back to homedir — claude CLI still loads global ~/.claude/ settings.
+const _ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const PROJECT_ROOT = _ROOT.includes('.asar') ? os.homedir() : _ROOT;
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -52,8 +70,10 @@ const BACKEND      = (process.env.AI_AGENT ?? 'claude').toLowerCase();
 const CLAUDE_BIN   = process.env.CLAUDE_BIN   ?? 'claude';
 const CODEX_BIN    = process.env.CODEX_BIN    ?? 'codex';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5';
-// CODEX_MODEL: leave unset to use whatever model is in ~/.codex/config.toml
-const CODEX_MODEL  = process.env.CODEX_MODEL  ?? null;
+// CODEX_MODEL: leave empty to use codex's built-in default (the ChatGPT account default).
+// Override via CODEX_MODEL env var if you need a specific model.
+// Note: gpt-4o-mini and other API-only models are NOT supported with ChatGPT accounts.
+const CODEX_MODEL  = process.env.CODEX_MODEL  ?? '';
 
 const START_TIME   = Date.now();
 
@@ -205,20 +225,38 @@ async function generateCodex(systemPrompt, userMessage, plugins) {
   context += CODEX_JSON_INSTRUCTION;
   const fullPrompt = `${context}\n\n---\n\n${userMessage}`;
 
-  let args;
-  if (codexSessionId) {
-    // Resume existing thread — codex CLI manages full conversation history internally
-    args = ['exec', 'resume', codexSessionId, fullPrompt];
-    log(`Resuming Codex thread ${codexSessionId}`);
-  } else {
-    args = ['exec', fullPrompt];
+  function buildArgs(sessionId) {
+    const a = sessionId
+      ? ['exec', 'resume', sessionId, fullPrompt]
+      : ['exec', fullPrompt];
+    a.push('--json');                // JSONL events: thread_id + item.completed
+    a.push('--full-auto');           // approval=never — prevents stdin prompt for approval
+    a.push('--skip-git-repo-check'); // cwd may not be in codex trusted list in packaged app
+    a.push('--ignore-user-config');  // skip ~/.codex/config.toml MCP servers (seens_notify
+                                     // has approval_mode=approve which triggers stdin read)
+    if (CODEX_MODEL) a.push('-m', CODEX_MODEL);
+    return a;
   }
 
-  args.push('--json');   // JSONL events on stdout — gives us thread_id + item.completed
-  if (CODEX_MODEL) args.push('-m', CODEX_MODEL);
-
-  // ignoreStdin prevents codex from blocking waiting for piped input
-  const jsonl = await runCLI(CODEX_BIN, args, PROJECT_ROOT, { ignoreStdin: true });
+  let jsonl;
+  if (codexSessionId) {
+    log(`Resuming Codex thread ${codexSessionId}`);
+    try {
+      jsonl = await runCLI(CODEX_BIN, buildArgs(codexSessionId), CODEX_WORKSPACE, { ignoreStdin: true });
+    } catch (err) {
+      if (err.message.includes('not found') || err.message.includes('thread')) {
+        // Stale session ID — clear it and start a fresh thread
+        log(`Stale Codex session ${codexSessionId} — clearing and retrying fresh`);
+        codexSessionId = null;
+        try { fs.unlinkSync(CODEX_SID); } catch { /* */ }
+        jsonl = await runCLI(CODEX_BIN, buildArgs(null), CODEX_WORKSPACE, { ignoreStdin: true });
+      } else {
+        throw err;
+      }
+    }
+  } else {
+    jsonl = await runCLI(CODEX_BIN, buildArgs(null), CODEX_WORKSPACE, { ignoreStdin: true });
+  }
 
   // Parse JSONL: extract thread_id and final agent message text
   let threadId = null;

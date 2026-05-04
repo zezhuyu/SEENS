@@ -16,6 +16,7 @@
 
 import { spawn }          from 'child_process';
 import readline           from 'readline';
+import fs                 from 'fs';
 import path               from 'path';
 import { fileURLToPath }  from 'url';
 import { getPref, setPref } from './state.js';
@@ -40,10 +41,20 @@ function _scriptPath() {
       ?? DEFAULT_SCRIPT;
 }
 
+function _pythonBin(scriptPath) {
+  // Prefer the venv python sibling to the script's repo root.
+  // e.g. /path/to/seens-reranker/subprocess_main.py
+  //   → /path/to/seens-reranker/venv/bin/python3
+  const repoRoot = path.dirname(scriptPath);
+  const venvPy   = path.join(repoRoot, 'venv', 'bin', 'python3');
+  return fs.existsSync(venvPy) ? venvPy : (process.env.RERANKER_PYTHON ?? 'python3');
+}
+
 function _spawnSubprocess() {
   const script = _scriptPath();
-  console.log(`[Reranker] spawning subprocess: python3 ${script}`);
-  _proc = spawn('python3', [script], {
+  const python  = _pythonBin(script);
+  console.log(`[Reranker] spawning subprocess: ${python} ${script}`);
+  _proc = spawn(python, [script], {
     stdio: ['pipe', 'pipe', 'inherit'],
     env: { ...process.env },
   });
@@ -106,6 +117,12 @@ export function isSubprocessRunning() {
 export function enableReranker() {
   setPref('reranker.enabled', '1');
   if (!isSubprocessRunning()) {
+    const script = _scriptPath();
+    if (!fs.existsSync(script)) {
+      console.error(`[Reranker] script not found: ${script}`);
+      console.error('[Reranker] Set RERANKER_SCRIPT env var or reranker.script pref to the full path of subprocess_main.py');
+      return;
+    }
     try {
       _spawnSubprocess();
     } catch (err) {
@@ -231,6 +248,33 @@ export async function getHealth() {
     if (res.ok) return { source: 'http', ...(await res.json()) };
   } catch { /* unreachable */ }
   return null;
+}
+
+// ─── Playlist seed ────────────────────────────────────────────────────────────
+
+/**
+ * Fetch up to `limit` songs from a YouTube playlist URL via yt-dlp,
+ * embed them with all available models, and store in the reranker DB.
+ *
+ * @param {string} url  — YouTube playlist (or channel/video) URL
+ * @param {{ limit?: number, downloadAudio?: boolean }} opts
+ * @returns {Promise<{ ok, fail, total, fetched }>}
+ */
+export async function seedPlaylist(url, { limit = 200, downloadAudio = true } = {}) {
+  return _call('seed', { url, limit, download_audio: downloadAudio }, 30 * 60_000);
+}
+
+/**
+ * Seed the reranker DB from connected music service tracks.
+ * For each track: searches YouTube, downloads 60s audio, embeds with all 3 models.
+ * Already-embedded songs are skipped.
+ *
+ * @param {Array<{title,artist,source,uri?}>} tracks
+ * @param {{ limit?: number }} opts
+ * @returns {Promise<{ ok, fail, total, fetched, skipped }>}
+ */
+export async function seedLibrary(tracks, { limit = 200 } = {}) {
+  return _call('seed_library', { tracks, limit }, 30 * 60_000);
 }
 
 // ─── Feedback (fire-and-forget) ───────────────────────────────────────────────

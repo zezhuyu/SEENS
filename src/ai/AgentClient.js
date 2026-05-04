@@ -11,7 +11,7 @@
  *   const result = await agent.generate(systemPrompt, userMessage)
  */
 
-import { spawn }    from 'child_process';
+import { spawn, execSync } from 'child_process';
 import path         from 'path';
 import readline     from 'readline';
 import { fileURLToPath } from 'url';
@@ -19,6 +19,24 @@ import fs           from 'fs';
 
 const __dirname    = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_SCRIPT = path.join(__dirname, 'AgentProcess.js');
+
+// Resolve the Node.js binary to use for spawning AgentProcess.
+// In dev: use `node` from PATH (avoids ENOTDIR with Electron binary symlinks).
+// In packaged Electron: node isn't in PATH, so fall back to process.execPath
+// (with ELECTRON_RUN_AS_NODE=1 it behaves as plain Node.js).
+function resolveNodeBin() {
+  if (process.env.ELECTRON_RUN_AS_NODE === '1') return process.execPath;
+  // If AgentProcess.js lives inside an .asar bundle, system `node` cannot read it —
+  // .asar transparency is Electron-only. Fall straight to process.execPath.
+  if (AGENT_SCRIPT.includes('.asar')) return process.execPath;
+  // Dev mode: resolve `node` from PATH to avoid ENOTDIR with Electron binary symlinks.
+  try {
+    const n = execSync('which node', { encoding: 'utf8', timeout: 2000 }).trim();
+    if (n) return n;
+  } catch { /* node not in PATH */ }
+  return process.execPath;
+}
+const NODE_BIN = resolveNodeBin();
 const PLUGINS_FILE = path.join(__dirname, '../../USER/plugins.json');
 
 // Load plugins.json — re-read on each generate() so hot-edited plugins are
@@ -52,10 +70,13 @@ class AgentClient {
   }
 
   _spawn() {
-    console.log('[AgentClient] Spawning AI agent subprocess…');
-    this._proc = spawn(process.execPath, [AGENT_SCRIPT], {
+    console.log(`[AgentClient] Spawning AI agent subprocess (node=${NODE_BIN})…`);
+    // NODE_BIN: `node` from PATH in dev, or process.execPath in packaged Electron.
+    // ELECTRON_RUN_AS_NODE=1: harmless in dev; required in packaged app so the
+    // Electron binary skips app lifecycle (no single-instance lock, no BrowserWindow).
+    this._proc = spawn(NODE_BIN, [AGENT_SCRIPT], {
       stdio: ['pipe', 'pipe', 'inherit'],
-      env: { ...process.env },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     });
 
     this._proc.on('error', err => {

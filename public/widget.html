@@ -690,6 +690,9 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [manifestDraft, setManifestDraft]           = useState('');
   const [manifestState, setManifestState]           = useState('idle');
   const [reranker, setReranker]                     = useState(null);  // { enabled, running, reachable }
+  const [seedUrl, setSeedUrl]                       = useState('');
+  const [seedStatus, setSeedStatus]                 = useState(null);  // null | 'loading' | { ok, fail, ... } | { error }
+  const [libSeedStatus, setLibSeedStatus]           = useState(null);
 
   useEffect(() => {
     if (!open) return;
@@ -1134,27 +1137,104 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
             </div>
           </div>
 
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch', gap:6 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div className="settings-row-label">Reranker</div>
+              <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
+                <input type="checkbox"
+                  checked={reranker?.enabled ?? false}
+                  onChange={e => {
+                    const enabled = e.target.checked;
+                    setReranker(r => ({ ...r, enabled, running: false }));
+                    fetch('/api/settings/reranker', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ enabled }),
+                    }).then(r => r.json()).then(d => setReranker(r => ({ ...r, ...d })));
+                  }}
+                  style={{ accentColor:'var(--accent)', width:14, height:14 }}/>
+                <span style={{ fontSize:12, color:'var(--ink-2)' }}>
+                  {reranker?.enabled
+                    ? (reranker?.running ? '● running' : '○ starting…')
+                    : 'enable'}
+                </span>
+              </label>
+            </div>
+            <input
+              className="settings-input"
+              style={{ fontSize:11, fontFamily:'var(--font-mono)' }}
+              placeholder="/path/to/seens-reranker/subprocess_main.py"
+              defaultValue={reranker?.scriptPath ?? ''}
+              onBlur={e => {
+                const scriptPath = e.target.value.trim();
+                fetch('/api/settings/reranker', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ enabled: reranker?.enabled ?? false, scriptPath }),
+                }).then(r => r.json()).then(d => setReranker(r => ({ ...r, ...d })));
+              }}/>
+            <div className="settings-row-sub">Full path to subprocess_main.py in seens-reranker</div>
+          </div>
+
           <div className="settings-row">
-            <div className="settings-row-label">Reranker</div>
-            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
-              <input type="checkbox"
-                checked={reranker?.enabled ?? false}
-                onChange={e => {
-                  const enabled = e.target.checked;
-                  setReranker(r => ({ ...r, enabled, running: false }));
-                  fetch('/api/settings/reranker', {
+            <div className="settings-row-label">Seed from library</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+              <button
+                className="settings-btn"
+                disabled={libSeedStatus === 'loading' || !reranker?.running}
+                onClick={() => {
+                  setLibSeedStatus('loading');
+                  fetch('/api/settings/reranker/seed-library', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled }),
-                  }).then(r => r.json()).then(d => setReranker(r => ({ ...r, ...d })));
-                }}
-                style={{ accentColor:'var(--accent)', width:14, height:14 }}/>
-              <span style={{ fontSize:12, color:'var(--ink-2)' }}>
-                {reranker?.enabled
-                  ? (reranker?.running ? '● subprocess running' : '○ starting…')
-                  : 'AI reranker (seens-reranker)'}
-              </span>
-            </label>
+                    body: JSON.stringify({ limit: 200 }),
+                  }).then(r => r.json()).then(d => setLibSeedStatus(d)).catch(err => setLibSeedStatus({ error: err.message }));
+                }}>
+                {libSeedStatus === 'loading' ? 'Seeding…' : 'Seed music library'}
+              </button>
+              {libSeedStatus && libSeedStatus !== 'loading' && (
+                <div className="settings-row-sub" style={{ color: libSeedStatus.error ? 'var(--error)' : 'var(--ink-2)' }}>
+                  {libSeedStatus.error
+                    ? libSeedStatus.error
+                    : `${libSeedStatus.ok} embedded, ${libSeedStatus.skipped ?? 0} skipped, ${libSeedStatus.fail} failed of ${libSeedStatus.fetched}`}
+                </div>
+              )}
+              <div className="settings-row-sub">Fetches top 200 from your synced music library via yt-dlp</div>
+            </div>
+          </div>
+
+          <div className="settings-row" style={{ flexDirection:'column', alignItems:'flex-start', gap:6 }}>
+            <div className="settings-row-label">Seed from playlist</div>
+            <div style={{ display:'flex', gap:6, width:'100%' }}>
+              <input
+                className="settings-input"
+                style={{ flex:1, fontSize:11 }}
+                placeholder="YouTube playlist URL"
+                value={seedUrl}
+                onChange={e => setSeedUrl(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}/>
+              <button
+                className="settings-btn"
+                disabled={!seedUrl.trim() || seedStatus === 'loading' || !reranker?.running}
+                onClick={() => {
+                  setSeedStatus('loading');
+                  fetch('/api/settings/reranker/seed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: seedUrl.trim(), limit: 200 }),
+                  }).then(r => r.json()).then(d => setSeedStatus(d)).catch(err => setSeedStatus({ error: err.message }));
+                }}>
+                {seedStatus === 'loading' ? 'Seeding…' : 'Seed'}
+              </button>
+            </div>
+            {seedStatus && seedStatus !== 'loading' && (
+              <div className="settings-row-sub" style={{ color: seedStatus.error ? 'var(--error)' : 'var(--ink-2)' }}>
+                {seedStatus.error
+                  ? seedStatus.error
+                  : `Done: ${seedStatus.ok} embedded, ${seedStatus.fail} failed of ${seedStatus.fetched} tracks`}
+              </div>
+            )}
+            {!reranker?.running && <div className="settings-row-sub" style={{ color:'var(--ink-3)' }}>Enable reranker first</div>}
           </div>
 
           <div className="settings-row">

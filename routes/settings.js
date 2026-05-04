@@ -4,8 +4,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getPref, setPref, clearQueue, setSessionStart, getSessionContext } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgentName, agentStatus, agentReset } from '../src/ai/index.js';
-import { isRerankerEnabled, enableReranker, disableReranker, isSubprocessRunning, getHealth as getRerankerHealth } from '../src/reranker.js';
-import { ensureUserDir, userPath, readUserFile } from '../src/paths.js';
+import { isRerankerEnabled, enableReranker, disableReranker, isSubprocessRunning, getHealth as getRerankerHealth, seedPlaylist, seedLibrary } from '../src/reranker.js';
+import { ensureUserDir, userPath, readUserFile, readUserJSON } from '../src/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = path.join(__dirname, '../.env');
@@ -127,15 +127,17 @@ router.post('/agent/reset', async (req, res) => {
 
 // GET /api/settings/reranker — enabled state + subprocess/health status
 router.get('/reranker', async (req, res) => {
-  const enabled = isRerankerEnabled();
-  const running = isSubprocessRunning();
-  const health  = enabled ? await getRerankerHealth() : null;
-  res.json({ enabled, running, reachable: !!health, health });
+  const enabled    = isRerankerEnabled();
+  const running    = isSubprocessRunning();
+  const scriptPath = getPref('reranker.script', null);
+  const health     = enabled ? await getRerankerHealth() : null;
+  res.json({ enabled, running, reachable: !!health, health, scriptPath });
 });
 
 // POST /api/settings/reranker — enable (spawns subprocess) or disable (kills it)
 router.post('/reranker', async (req, res) => {
-  const { enabled } = req.body;
+  const { enabled, scriptPath } = req.body;
+  if (scriptPath !== undefined) setPref('reranker.script', scriptPath || null);
   if (enabled) {
     enableReranker();
   } else {
@@ -208,6 +210,46 @@ router.post('/env-keys', (req, res) => {
     setPref('tts.provider', req.body['TTS_PROVIDER'].trim());
   }
   res.json({ ok: true, updated });
+});
+
+// POST /api/settings/reranker/seed-library — embed tracks from connected music services
+// Reads playlists.json (synced library), searches YouTube for each, downloads + embeds.
+router.post('/reranker/seed-library', async (req, res) => {
+  if (!isRerankerEnabled() || !isSubprocessRunning()) {
+    return res.status(503).json({ error: 'Reranker not running — enable it first' });
+  }
+  const raw = readUserJSON('playlists.json');
+  const tracks = Array.isArray(raw) ? raw : [];
+  if (!tracks.length) {
+    return res.status(400).json({ error: 'No tracks in library — sync a music service first' });
+  }
+  const limit = parseInt(req.body?.limit) || 200;
+  try {
+    const result = await seedLibrary(tracks, { limit });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/settings/reranker/seed — fetch playlist from URL and embed songs
+router.post('/reranker/seed', async (req, res) => {
+  const { url, limit, downloadAudio } = req.body;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'url required' });
+  }
+  if (!isRerankerEnabled() || !isSubprocessRunning()) {
+    return res.status(503).json({ error: 'Reranker not running — enable it first' });
+  }
+  try {
+    const result = await seedPlaylist(url, {
+      limit: parseInt(limit) || 200,
+      downloadAudio: !!downloadAudio,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/settings/queue/clear — flush queue

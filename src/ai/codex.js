@@ -3,23 +3,27 @@
  * Uses your Codex CLI login (ChatGPT Plus or API key via `codex login`).
  */
 
-import { spawn } from 'child_process';
-import { readFileSync, unlinkSync } from 'fs';
-import { tmpdir, homedir } from 'os';
-import { join } from 'path';
+import { spawn, execSync } from 'child_process';
+import { homedir }         from 'os';
+import { mkdirSync, existsSync } from 'fs';
+import { join }            from 'path';
 
-const CODEX_BIN = process.env.CODEX_BIN ?? 'codex';
-
-// Read model from ~/.codex/config.toml so ChatGPT-account users get their configured model.
-// Override via CODEX_MODEL env var; fall back to o4-mini if config is unreadable.
-function readCodexConfigModel() {
+// Codex requires cwd to be a git repo for workspace-write sandbox.
+// In read-only sandbox it reads stdin before responding (blocking).
+const CODEX_WORKSPACE = join(homedir(), '.seens', 'codex-workspace');
+mkdirSync(CODEX_WORKSPACE, { recursive: true });
+if (!existsSync(join(CODEX_WORKSPACE, '.git'))) {
   try {
-    const cfg = readFileSync(join(homedir(), '.codex', 'config.toml'), 'utf8');
-    const m = cfg.match(/^\s*model\s*=\s*"([^"]+)"/m);
-    return m?.[1] ?? null;
-  } catch { return null; }
+    execSync('git init', { cwd: CODEX_WORKSPACE, stdio: 'ignore' });
+    execSync('git config user.email "seens@local"', { cwd: CODEX_WORKSPACE, stdio: 'ignore' });
+    execSync('git config user.name "SEENS"', { cwd: CODEX_WORKSPACE, stdio: 'ignore' });
+  } catch { /* git unavailable */ }
 }
-const CODEX_MODEL = process.env.CODEX_MODEL ?? readCodexConfigModel() ?? 'o4-mini';
+
+const CODEX_BIN   = process.env.CODEX_BIN   ?? 'codex';
+// Leave empty to use codex's built-in default (the ChatGPT account default).
+// gpt-4o-mini and other API-only models are NOT supported with ChatGPT accounts.
+const CODEX_MODEL = process.env.CODEX_MODEL ?? '';
 
 let currentProc = null;
 
@@ -49,29 +53,29 @@ Respond ONLY with a single JSON object (no markdown, no extra text) with these f
 }`;
 
 export async function generate(systemPrompt, userMessage) {
-  const outPath = join(tmpdir(), `seens-codex-${Date.now()}.txt`);
   const fullPrompt = `${systemPrompt}\n${JSON_INSTRUCTION}\n\n---\nUser: ${userMessage}`;
 
-  const args = [
-    'exec', fullPrompt,
-    '--output-last-message', outPath,
-    '--ephemeral',
-    '--full-auto',
-    '--skip-git-repo-check',
-    '--ignore-user-config',  // skip oh-my-codex MCP servers + AGENTS.md (~50s overhead)
-    '-C', '/tmp',            // use /tmp as workdir — avoids SIP-protected / in packaged app
-    '-m', CODEX_MODEL,
-  ];
+  // --json: JSONL output mode — single-shot, non-conversational (no stdin reads).
+  // --full-auto: sets approval=never — without it codex reads stdin to ask for approval.
+  // --skip-git-repo-check: CODEX_WORKSPACE is a fresh git repo, may not be in trust list.
+  const args = ['exec', fullPrompt, '--json', '--full-auto', '--skip-git-repo-check',
+                '--ignore-user-config'];  // skip ~/.codex/config.toml MCP servers (approval prompts)
+  if (CODEX_MODEL) args.push('-m', CODEX_MODEL);
 
-  try {
-    await runCLI(CODEX_BIN, args);
-    const text = readFileSync(outPath, 'utf8').trim();
-    console.log(`[Codex] model=${CODEX_MODEL ?? '(config default)'}`);
-    console.log(`[Codex] raw response (first 400): ${text.slice(0, 400)}`);
-    return parseOutput(text);
-  } finally {
-    try { unlinkSync(outPath); } catch { /* ignore */ }
+  const jsonl = await runCLI(CODEX_BIN, args);
+
+  // Extract agent message from item.completed JSONL event
+  let resultText = null;
+  for (const line of jsonl.split('\n')) {
+    let evt;
+    try { evt = JSON.parse(line); } catch { continue; }
+    if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
+      resultText = evt.item.text ?? null;
+    }
   }
+
+  console.log(`[Codex] model=${CODEX_MODEL} result (first 400): ${(resultText ?? '').slice(0, 400)}`);
+  return parseOutput(resultText ?? '');
 }
 
 function parseOutput(text) {
@@ -109,17 +113,24 @@ function normalizeTrack(t) {
 
 function runCLI(bin, args) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args, { env: process.env, cwd: '/tmp', stdio: ['ignore', 'pipe', 'pipe'] });
+    // CODEX_WORKSPACE: a git repo so codex gets workspace-write sandbox.
+    // Non-git dirs → read-only sandbox → codex reads stdin before responding.
+    const proc = spawn(bin, args, { env: process.env, cwd: CODEX_WORKSPACE, stdio: ['ignore', 'pipe', 'pipe'] });
     currentProc = proc;
+    let stdout = '';
     let stderr = '';
 
+    proc.stdout.on('data', d => stdout += d);
     proc.stderr.on('data', d => stderr += d);
-    proc.stdout.on('data', () => {});
 
     proc.on('close', (code, signal) => {
       if (currentProc === proc) currentProc = null;
-      if (code === 0 && !signal) { resolve(); return; }
-      reject(new Error(`codex exited ${signal ?? code}: ${stderr.slice(0, 300)}`));
+      // Resolve if we got a valid response even on non-zero exit (session bookkeeping errors)
+      if (code === 0 || stdout.includes('"item.completed"')) {
+        resolve(stdout.trim());
+      } else {
+        reject(new Error(`codex exited ${signal ?? code}: ${stderr.slice(0, 300)}`));
+      }
     });
     proc.on('error', err => {
       if (currentProc === proc) currentProc = null;
