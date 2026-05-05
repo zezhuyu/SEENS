@@ -24,7 +24,18 @@ import { getWeatherContext } from './weather.js';
 import { fetchLyricsBatch } from '../music/lyrics.js';
 
 const ROOT          = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const DEFAULT_SCRIPT = path.join(ROOT, 'music-reranker', 'subprocess_main.py');
+const DEFAULT_SCRIPT = path.join(ROOT, 'seens-reranker', 'subprocess_main.py');
+
+// ─── Canonical song ID ────────────────────────────────────────────────────────
+// Must match Python's _canonical_key() in seens-reranker/reranker/sync.py:
+//   norm = re.sub(r"[^a-z0-9]", "", s.lower())
+//   key  = f"lib:{norm(title)}___{norm(artist)}"
+// Using a unified scheme everywhere (seeding, reranking, feedback) so DB
+// lookups always hit — Spotify URIs dropped as IDs in favour of canonical keys.
+function _norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+export function canonicalSongId(track) {
+  return `lib:${_norm(track.title)}___${_norm(track.artist || '')}`;
+}
 const RERANKER_URL  = process.env.RERANKER_URL ?? 'http://127.0.0.1:7480';
 const CONNECT_TIMEOUT  = 3_000;
 const RERANK_TIMEOUT   = 120_000;   // model inference once loaded (runs in parallel — latency ok)
@@ -187,7 +198,7 @@ export async function rerank(candidates, contextOverrides = {}) {
   ]);
 
   const songs = candidates.map((t, i) => ({
-    id:     t.uri ?? `${t.title}___${t.artist}`,
+    id:     canonicalSongId(t),
     title:  t.title,
     artist: t.artist ?? '',
     source: t.source ?? 'any',
@@ -234,7 +245,7 @@ async function _rerankHttp(songs, context, candidates) {
 
 function _mapBack(ranked, candidates) {
   if (!ranked?.length) return null;
-  const idMap = new Map(candidates.map(t => [t.uri ?? `${t.title}___${t.artist}`, t]));
+  const idMap = new Map(candidates.map(t => [canonicalSongId(t), t]));
   return ranked.map(r => {
     const orig = idMap.get(r.id) ?? { title: r.title, artist: r.artist, source: 'any' };
     return { ...orig, reranker_score: r.reranker_score, attention_weights: r.attention_weights };
@@ -316,16 +327,23 @@ export async function getSeedProgress() {
   } catch { return null; }
 }
 
-export function sendFeedback(songId, event, context = null) {
+/**
+ * Record a user preference event for a song.
+ * @param {{ title: string, artist?: string }} track
+ * @param {'like'|'skip'|'replay'} event
+ * @param {object|null} context
+ */
+export function sendFeedback(track, event, context = null) {
   if (!isRerankerEnabled()) return;
+  const song_id = canonicalSongId(track);
   if (isSubprocessRunning()) {
-    _call('feedback', { song_id: songId, event, context }, 3_000).catch(() => {});
+    _call('feedback', { song_id, event, context }, 3_000).catch(() => {});
     return;
   }
   fetch(`${RERANKER_URL}/api/feedback`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ song_id: songId, event, context }),
+    body:    JSON.stringify({ song_id, event, context }),
     signal:  AbortSignal.timeout(3_000),
   }).catch(() => {});
 }

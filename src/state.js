@@ -398,4 +398,77 @@ export function getTodayPlan() {
   return row ? JSON.parse(row.schedule_json) : null;
 }
 
+// ─── Temporal plays profile ───────────────────────────────────────────────────
+// Analyzes plays history to find what the user listens to at each time of day
+// and day of week — surfaces as a human-readable profile for the DJ prompt.
+
+function _timeBucket(hour, dow) {
+  // dow: 0=Sun, 1=Mon … 6=Sat (JS getDay())
+  const day = (dow === 0 || dow === 6) ? 'Weekend' : 'Weekday';
+  let slot;
+  if      (hour >= 6  && hour < 10) slot = 'Morning (6–10am)';
+  else if (hour >= 10 && hour < 14) slot = 'Midday (10am–2pm)';
+  else if (hour >= 14 && hour < 18) slot = 'Afternoon (2–6pm)';
+  else if (hour >= 18 && hour < 22) slot = 'Evening (6–10pm)';
+  else                               slot = 'Late Night (10pm–6am)';
+  return `${day} ${slot}`;
+}
+
+export function getTemporalPlaysProfile() {
+  // Pull plays from the last 60 days with local-time hour + day-of-week
+  const rows = db.prepare(`
+    SELECT artist,
+      CAST(strftime('%H', datetime(played_at, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
+      CAST(strftime('%w', datetime(played_at, 'unixepoch', 'localtime')) AS INTEGER) AS dow
+    FROM plays
+    WHERE played_at >= unixepoch() - 60 * 86400
+      AND artist IS NOT NULL AND trim(artist) != ''
+  `).all();
+
+  if (!rows.length) return null;
+
+  // Count plays per artist per bucket
+  const bucketMap = new Map();
+  for (const { artist, hour, dow } of rows) {
+    const key = _timeBucket(hour, dow);
+    if (!bucketMap.has(key)) bucketMap.set(key, new Map());
+    const artists = bucketMap.get(key);
+    const a = artist.trim();
+    artists.set(a, (artists.get(a) ?? 0) + 1);
+  }
+
+  // Sort buckets in a natural time order
+  const order = [
+    'Weekday Morning (6–10am)', 'Weekday Midday (10am–2pm)',
+    'Weekday Afternoon (2–6pm)', 'Weekday Evening (6–10pm)', 'Weekday Late Night (10pm–6am)',
+    'Weekend Morning (6–10am)', 'Weekend Midday (10am–2pm)',
+    'Weekend Afternoon (2–6pm)', 'Weekend Evening (6–10pm)', 'Weekend Late Night (10pm–6am)',
+  ];
+  const sorted = [...bucketMap.entries()].sort(
+    ([a], [b]) => (order.indexOf(a) - order.indexOf(b))
+  );
+
+  const lines = [];
+  for (const [bucket, artists] of sorted) {
+    const top = [...artists.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([a]) => a);
+    if (top.length) lines.push(`- **${bucket}**: ${top.join(', ')}`);
+  }
+
+  return lines.length ? lines.join('\n') : null;
+}
+
+// ─── Reranker skip tracking ───────────────────────────────────────────────────
+// Lets routes/next.js know the current song was skipped (not naturally completed)
+// so it doesn't incorrectly send a 'replay' preference signal.
+let _lastSkippedKey = null;
+export function markRerankerSkip(key) { _lastSkippedKey = key; }
+export function consumeAndClearSkipKey() {
+  const k = _lastSkippedKey;
+  _lastSkippedKey = null;
+  return k;
+}
+
 export default db;

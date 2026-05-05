@@ -1,7 +1,8 @@
 import express from 'express';
-import { dequeue, peekNext, getRecentPlays } from '../src/state.js';
+import { dequeue, peekNext, getRecentPlays, consumeAndClearSkipKey } from '../src/state.js';
 import { broadcast } from '../src/ws-broadcast.js';
 import { handleInput } from '../src/router.js';
+import { sendFeedback, isRerankerEnabled } from '../src/reranker.js';
 
 const router = express.Router();
 
@@ -32,6 +33,20 @@ function refillFromHistory() {
 }
 
 router.post('/', (req, res) => {
+  // Before dequeuing: the last play is the song that just finished naturally.
+  // Send a 'replay' preference signal unless the user explicitly skipped it.
+  if (isRerankerEnabled()) {
+    const [justFinished] = getRecentPlays(1);
+    if (justFinished) {
+      const skippedKey = consumeAndClearSkipKey();
+      const finishedKey = `${justFinished.title}___${justFinished.artist ?? ''}`;
+      if (skippedKey !== finishedKey) {
+        sendFeedback({ title: justFinished.title, artist: justFinished.artist ?? '' }, 'replay');
+        console.log(`[Reranker] replay signal — "${justFinished.title}" by ${justFinished.artist ?? ''}`);
+      }
+    }
+  }
+
   const track = dequeue();
   const queued = peekNext();
   const upNext = queued[0] ? {

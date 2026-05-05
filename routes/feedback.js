@@ -1,5 +1,6 @@
 import express from 'express';
-import { recordFeedback, recordSkip } from '../src/state.js';
+import { recordFeedback, recordSkip, markRerankerSkip } from '../src/state.js';
+import { sendFeedback, isRerankerEnabled } from '../src/reranker.js';
 
 const router = express.Router();
 
@@ -12,8 +13,15 @@ router.post('/', (req, res) => {
   try {
     if (rating === 'skip') {
       recordSkip({ videoId: videoId ?? null, title, artist: artist ?? '' });
+      // Mark so /api/next doesn't also fire a 'replay' for this song
+      markRerankerSkip(`${title}___${artist ?? ''}`);
+      if (isRerankerEnabled()) sendFeedback({ title, artist: artist ?? '' }, 'skip');
     } else {
       recordFeedback({ videoId: videoId ?? null, title, artist: artist ?? '', rating });
+      // 'like' → strong positive preference signal to the reranker
+      if (rating === 'like' && isRerankerEnabled()) {
+        sendFeedback({ title, artist: artist ?? '' }, 'like');
+      }
     }
     res.json({ ok: true });
   } catch (err) {

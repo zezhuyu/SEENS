@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getSessionMessages, getRecentPlays, peekNext, getQueueTracks, getPref, getSessionSuggestions, getRecentCrossSessionSuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback, getRecentSkips, getSessionMood, getSessionContext } from './state.js';
+import { getSessionMessages, getRecentPlays, peekNext, getQueueTracks, getPref, getSessionSuggestions, getRecentCrossSessionSuggestions, getCrossSessionSuggestions, getRecentFeedback, getArtistFeedback, getRecentSkips, getSessionMood, getSessionContext, getTemporalPlaysProfile } from './state.js';
 import { getWeatherContext } from './weather.js';
 import { getLocation } from './location.js';
 import { readUserFile, readUserJSON } from './paths.js';
@@ -51,6 +51,7 @@ export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode =
   const taste = tasteRaw.length > 2000 ? tasteRaw.slice(0, 2000) + '\n...(truncated)' : tasteRaw;
   const routines = readUserFile('routines.md');
   const moodRules = readUserFile('mood-rules.md');
+  const temporalProfile = getTemporalPlaysProfile();
 
   // Fragment 3 — Environment (time, day, season, variety seed)
   const now = new Date();
@@ -180,6 +181,7 @@ export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode =
     persona,
     '---\n## User Taste Profile\n' + taste,
     routines ? '## Routines\n' + routines : '',
+    temporalProfile ? `## Listening Habits by Time of Day\n*(Learned from play history — what the user actually listens to at each time)*\n${temporalProfile}` : '',
     moodRules ? '## Mood Rules\n' + moodRules : '',
     topArtistsCtx  ? '## Spotify Listening Rank (taste signal — use to understand genres, eras, and energy; curate freely beyond this)\n' + topArtistsCtx  : '',
     libraryCtx     ? '## User\'s Music Library (taste reference + occasional picks — not the only source)\n' + libraryCtx     : '',
