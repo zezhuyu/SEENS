@@ -1181,22 +1181,36 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
             <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
               <button
                 className="settings-btn"
-                disabled={libSeedStatus === 'loading' || !reranker?.running}
+                disabled={libSeedStatus?.running || !reranker?.running}
                 onClick={() => {
-                  setLibSeedStatus('loading');
+                  setLibSeedStatus({ running: true, ok: 0, skipped: 0, fail: 0, total: 0 });
                   fetch('/api/settings/reranker/seed-library', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ limit: 200 }),
-                  }).then(r => r.json()).then(d => setLibSeedStatus(d)).catch(err => setLibSeedStatus({ error: err.message }));
+                  }).then(r => r.json()).then(d => {
+                    if (d.error) { setLibSeedStatus({ error: d.error }); return; }
+                    // Poll progress every 3s until done
+                    const poll = setInterval(() => {
+                      fetch('/api/settings/reranker/seed-progress')
+                        .then(r => r.json())
+                        .then(p => {
+                          setLibSeedStatus(p);
+                          if (!p.running) clearInterval(poll);
+                        })
+                        .catch(() => clearInterval(poll));
+                    }, 3000);
+                  }).catch(err => setLibSeedStatus({ error: err.message }));
                 }}>
-                {libSeedStatus === 'loading' ? 'Seeding…' : 'Seed music library'}
+                {libSeedStatus?.running ? 'Seeding…' : 'Seed music library'}
               </button>
-              {libSeedStatus && libSeedStatus !== 'loading' && (
+              {libSeedStatus && (
                 <div className="settings-row-sub" style={{ color: libSeedStatus.error ? 'var(--error)' : 'var(--ink-2)' }}>
                   {libSeedStatus.error
                     ? libSeedStatus.error
-                    : `${libSeedStatus.ok} embedded, ${libSeedStatus.skipped ?? 0} skipped, ${libSeedStatus.fail} failed of ${libSeedStatus.fetched}`}
+                    : libSeedStatus.total > 0
+                      ? `${libSeedStatus.ok} embedded, ${libSeedStatus.skipped ?? 0} skipped, ${libSeedStatus.fail} failed of ${libSeedStatus.total}${libSeedStatus.running ? ' (in progress…)' : ''}`
+                      : libSeedStatus.running ? 'Starting…' : ''}
                 </div>
               )}
               <div className="settings-row-sub">Fetches top 200 from your synced music library via yt-dlp</div>

@@ -224,15 +224,29 @@ router.post('/reranker/seed-library', async (req, res) => {
     return res.status(400).json({ error: 'No tracks in library — sync a music service first' });
   }
   const limit = parseInt(req.body?.limit) || 200;
+  // Fire-and-forget — returns immediately so the UI can poll /seed-progress
+  res.json({ ok: true, total: Math.min(tracks.length, limit), message: 'Seeding started' });
+  seedLibrary(tracks, { limit }).catch(err =>
+    console.warn('[Settings] seed-library error:', err.message)
+  );
+});
+
+// GET /api/settings/reranker/seed-progress — poll current seed status
+router.get('/reranker/seed-progress', async (req, res) => {
+  if (!isRerankerEnabled() || !isSubprocessRunning()) {
+    return res.json({ running: false, ok: 0, skipped: 0, fail: 0, total: 0 });
+  }
   try {
-    const result = await seedLibrary(tracks, { limit });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const { getSeedProgress } = await import('../src/reranker.js');
+    const progress = await getSeedProgress();
+    res.json(progress ?? { running: false, ok: 0, skipped: 0, fail: 0, total: 0 });
+  } catch {
+    res.json({ running: false, ok: 0, skipped: 0, fail: 0, total: 0 });
   }
 });
 
 // POST /api/settings/reranker/seed — fetch playlist from URL and embed songs
+// Fire-and-forget like seed-library — poll /seed-progress for status
 router.post('/reranker/seed', async (req, res) => {
   const { url, limit, downloadAudio } = req.body;
   if (!url || typeof url !== 'string') {
@@ -241,15 +255,13 @@ router.post('/reranker/seed', async (req, res) => {
   if (!isRerankerEnabled() || !isSubprocessRunning()) {
     return res.status(503).json({ error: 'Reranker not running — enable it first' });
   }
-  try {
-    const result = await seedPlaylist(url, {
-      limit: parseInt(limit) || 200,
-      downloadAudio: !!downloadAudio,
-    });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  const resolvedLimit = parseInt(limit) || 200;
+  // Return immediately — audio download + embedding takes 20-30 min for 200 songs
+  res.json({ ok: true, total: resolvedLimit, message: 'Seeding started' });
+  seedPlaylist(url, {
+    limit: resolvedLimit,
+    downloadAudio: downloadAudio ?? true,  // default true — downloads audio for MERT/CLAP
+  }).catch(err => console.warn('[Settings] seed-url error:', err.message));
 });
 
 // POST /api/settings/queue/clear — flush queue

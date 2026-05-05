@@ -43,6 +43,11 @@ export async function syncTopArtists() {
   }));
 }
 
+export async function syncLikedSongs(limit = 500) {
+  const items = await paginate('/me/tracks', 50);
+  return items.slice(0, limit).map(i => normalizeTrack(i.track, 'spotify')).filter(Boolean);
+}
+
 export async function syncPlaylists() {
   const playlists = await paginate('/me/playlists');
   const tracks = [];

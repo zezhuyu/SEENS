@@ -309,6 +309,13 @@ export async function seedLibrary(tracks, { limit = 200 } = {}) {
 
 // ─── Feedback (fire-and-forget) ───────────────────────────────────────────────
 
+export async function getSeedProgress() {
+  if (!isSubprocessRunning()) return null;
+  try {
+    return await _call('seed_progress', {}, 3_000);
+  } catch { return null; }
+}
+
 export function sendFeedback(songId, event, context = null) {
   if (!isRerankerEnabled()) return;
   if (isSubprocessRunning()) {
