@@ -11,16 +11,17 @@ async function spotifyFetch(path) {
   return res.json();
 }
 
-async function paginate(path, limit = 50) {
+async function paginate(path, limit = 50, maxItems = Infinity) {
   const items = [];
   let url = `${path}${path.includes('?') ? '&' : '?'}limit=${limit}&offset=0`;
   while (url) {
     const data = await spotifyFetch(url.replace(BASE, ''));
     const page = data.items ?? data.tracks?.items ?? [];
     items.push(...page);
+    if (items.length >= maxItems) break;
     url = data.next ? data.next.replace(BASE, '') : null;
   }
-  return items;
+  return items.slice(0, maxItems);
 }
 
 export async function syncRecentlyPlayed() {
@@ -43,9 +44,9 @@ export async function syncTopArtists() {
   }));
 }
 
-export async function syncLikedSongs(limit = 500) {
-  const items = await paginate('/me/tracks', 50);
-  return items.slice(0, limit).map(i => normalizeTrack(i.track, 'spotify')).filter(Boolean);
+export async function syncLikedSongs(limit = 200) {
+  const items = await paginate('/me/tracks', 50, limit);
+  return items.map(i => normalizeTrack(i.track, 'spotify')).filter(Boolean);
 }
 
 export async function syncPlaylists() {

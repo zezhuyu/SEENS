@@ -132,7 +132,7 @@ async function syncService(service, results) {
     if (service === 'spotify') {
       const { syncRecentlyPlayed, syncTopTracks, syncPlaylists, syncTopArtists, syncLikedSongs } = await import('./spotify.js');
       const [recent, top, playlists, liked] = await Promise.all([syncRecentlyPlayed(), syncTopTracks(), syncPlaylists(), syncLikedSongs()]);
-      results.spotify = [...recent, ...top, ...playlists, ...liked].filter(Boolean);
+results.spotify = [...recent, ...top, ...playlists, ...liked].filter(Boolean);
       results.spotifyArtists = await syncTopArtists();
     } else if (service === 'youtube') {
       const { syncLikedVideos, syncPlaylists } = await import('./youtube.js');

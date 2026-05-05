@@ -235,11 +235,29 @@ router.post('/reranker/seed-library', async (req, res) => {
   }
   const tracks = [...bySource.values()].flat();
 
-  // Fire-and-forget — returns immediately so the UI can poll /seed-progress
-  res.json({ ok: true, total: tracks.length, message: `Seeding started (${[...bySource.entries()].map(([s,v]) => `${s}:${v.length}`).join(', ')})` });
-  seedLibrary(tracks, { limit: tracks.length }).catch(err =>
-    console.warn('[Settings] seed-library error:', err.message)
-  );
+  // Also include any saved YouTube playlist URLs as additional sources
+  const savedPlaylists = JSON.parse(getPref('reranker.saved_playlists', '[]'));
+  const sourceBreakdown = [...bySource.entries()].map(([s,v]) => `${s}:${v.length}`);
+  if (savedPlaylists.length) sourceBreakdown.push(`saved_playlists:${savedPlaylists.length}`);
+
+  res.json({ ok: true, total: tracks.length, message: `Seeding started (${sourceBreakdown.join(', ')})` });
+
+  // Seed library tracks first, then saved playlist URLs sequentially
+  (async () => {
+    try {
+      await seedLibrary(tracks, { limit: tracks.length });
+    } catch (err) {
+      console.warn('[Settings] seed-library error:', err.message);
+    }
+    for (const playlistUrl of savedPlaylists) {
+      try {
+        console.log(`[Settings] seeding saved playlist: ${playlistUrl}`);
+        await seedPlaylist(playlistUrl, { limit: perSource, downloadAudio: true });
+      } catch (err) {
+        console.warn(`[Settings] saved playlist seed error (${playlistUrl}):`, err.message);
+      }
+    }
+  })();
 });
 
 // GET /api/settings/reranker/seed-progress — poll current seed status
@@ -258,6 +276,7 @@ router.get('/reranker/seed-progress', async (req, res) => {
 
 // POST /api/settings/reranker/seed — fetch playlist from URL and embed songs
 // Fire-and-forget like seed-library — poll /seed-progress for status
+// Also saves the URL so "Seed music library" includes it automatically next time.
 router.post('/reranker/seed', async (req, res) => {
   const { url, limit, downloadAudio } = req.body;
   if (!url || typeof url !== 'string') {
@@ -266,13 +285,31 @@ router.post('/reranker/seed', async (req, res) => {
   if (!isRerankerEnabled() || !isSubprocessRunning()) {
     return res.status(503).json({ error: 'Reranker not running — enable it first' });
   }
+  // Persist this URL so seed-library includes it going forward
+  const saved = JSON.parse(getPref('reranker.saved_playlists', '[]'));
+  if (!saved.includes(url)) {
+    saved.push(url);
+    setPref('reranker.saved_playlists', JSON.stringify(saved));
+  }
   const resolvedLimit = parseInt(limit) || 200;
-  // Return immediately — audio download + embedding takes 20-30 min for 200 songs
   res.json({ ok: true, total: resolvedLimit, message: 'Seeding started' });
   seedPlaylist(url, {
     limit: resolvedLimit,
-    downloadAudio: downloadAudio ?? true,  // default true — downloads audio for MERT/CLAP
+    downloadAudio: downloadAudio ?? true,
   }).catch(err => console.warn('[Settings] seed-url error:', err.message));
+});
+
+// GET /api/settings/reranker/saved-playlists — list saved playlist URLs
+router.get('/reranker/saved-playlists', (req, res) => {
+  res.json(JSON.parse(getPref('reranker.saved_playlists', '[]')));
+});
+
+// DELETE /api/settings/reranker/saved-playlists — remove a saved playlist URL
+router.delete('/reranker/saved-playlists', (req, res) => {
+  const { url } = req.body;
+  const saved = JSON.parse(getPref('reranker.saved_playlists', '[]'));
+  setPref('reranker.saved_playlists', JSON.stringify(saved.filter(u => u !== url)));
+  res.json({ ok: true });
 });
 
 // POST /api/settings/queue/clear — flush queue
