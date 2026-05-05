@@ -214,19 +214,30 @@ router.post('/env-keys', (req, res) => {
 
 // POST /api/settings/reranker/seed-library — embed tracks from connected music services
 // Reads playlists.json (synced library), searches YouTube for each, downloads + embeds.
+// Takes up to `perSource` tracks per connected source so all services are represented.
 router.post('/reranker/seed-library', async (req, res) => {
   if (!isRerankerEnabled() || !isSubprocessRunning()) {
     return res.status(503).json({ error: 'Reranker not running — enable it first' });
   }
   const raw = readUserJSON('playlists.json');
-  const tracks = Array.isArray(raw) ? raw : [];
-  if (!tracks.length) {
+  const allTracks = Array.isArray(raw) ? raw : [];
+  if (!allTracks.length) {
     return res.status(400).json({ error: 'No tracks in library — sync a music service first' });
   }
-  const limit = parseInt(req.body?.limit) || 200;
+  const perSource = parseInt(req.body?.limit) || 200;
+
+  // Group by source, cap each at perSource, then combine — all sources represented equally
+  const bySource = new Map();
+  for (const t of allTracks) {
+    const src = t.source ?? 'unknown';
+    if (!bySource.has(src)) bySource.set(src, []);
+    if (bySource.get(src).length < perSource) bySource.get(src).push(t);
+  }
+  const tracks = [...bySource.values()].flat();
+
   // Fire-and-forget — returns immediately so the UI can poll /seed-progress
-  res.json({ ok: true, total: Math.min(tracks.length, limit), message: 'Seeding started' });
-  seedLibrary(tracks, { limit }).catch(err =>
+  res.json({ ok: true, total: tracks.length, message: `Seeding started (${[...bySource.entries()].map(([s,v]) => `${s}:${v.length}`).join(', ')})` });
+  seedLibrary(tracks, { limit: tracks.length }).catch(err =>
     console.warn('[Settings] seed-library error:', err.message)
   );
 });
