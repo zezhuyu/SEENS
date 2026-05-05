@@ -48,6 +48,7 @@ let _rl            = null;
 let _pending       = new Map();   // id → { resolve, reject }
 let _idCounter     = 0;
 let _warmupPromise = null;        // resolves true (ready) or false (failed) once model is loaded
+let _restartTimer  = null;        // debounce handle for auto-restart
 
 function _scriptPath() {
   return process.env.RERANKER_SCRIPT
@@ -76,8 +77,10 @@ function _spawnSubprocess() {
     env: { ...process.env },
   });
 
+  let _spawnFailed = false;
   _proc.on('error', err => {
     console.error('[Reranker] subprocess error:', err.message);
+    _spawnFailed = true;
     _proc = null;
   });
 
@@ -88,6 +91,19 @@ function _spawnSubprocess() {
     // Reject any in-flight calls
     for (const [, { reject }] of _pending) reject(new Error('Reranker subprocess exited'));
     _pending.clear();
+    // Auto-restart on crash (signal != null) — but not for spawn errors or deliberate disables.
+    if (!_spawnFailed && isRerankerEnabled() && signal !== null) {
+      const delay = 5_000;
+      console.log(`[Reranker] unexpected exit — restarting in ${delay / 1000}s`);
+      clearTimeout(_restartTimer);
+      _restartTimer = setTimeout(() => {
+        if (!isSubprocessRunning() && isRerankerEnabled()) {
+          console.log('[Reranker] auto-restarting subprocess after crash');
+          _spawnSubprocess();
+          _warmup();
+        }
+      }, delay);
+    }
   });
 
   _rl = readline.createInterface({ input: _proc.stdout, terminal: false });
@@ -169,6 +185,8 @@ function _warmup() {
  */
 export async function disableReranker() {
   setPref('reranker.enabled', '0');
+  clearTimeout(_restartTimer);
+  _restartTimer = null;
   if (isSubprocessRunning()) {
     try { await _call('shutdown', {}, 3_000); } catch { /* ignore */ }
     try { _proc.kill(); } catch { /* ignore */ }
@@ -316,6 +334,28 @@ export async function seedPlaylist(url, { limit = 200, downloadAudio = true } = 
  */
 export async function seedLibrary(tracks, { limit = 200 } = {}) {
   return _call('seed_library', { tracks, limit }, 30 * 60_000);
+}
+
+// ─── Similar-song search ─────────────────────────────────────────────────────
+
+/**
+ * Find songs in the reranker DB that are acoustically/semantically similar
+ * to the given track. Uses KNN on CLAP embedding + full rerank pipeline.
+ *
+ * @param {{ title: string, artist?: string }} track  — reference song
+ * @param {number} limit — max results
+ * @returns {Promise<Array|null>}
+ */
+export async function findSimilar(track, limit = 20) {
+  if (!isRerankerEnabled() || !isSubprocessRunning()) return null;
+  const song_id = canonicalSongId(track);
+  try {
+    const result = await _call('find_similar', { song_id, limit }, 30_000);
+    return result?.songs ?? null;
+  } catch (err) {
+    console.warn('[Reranker] findSimilar failed:', err.message);
+    return null;
+  }
 }
 
 // ─── Feedback (fire-and-forget) ───────────────────────────────────────────────

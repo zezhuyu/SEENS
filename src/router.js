@@ -1,8 +1,8 @@
 import { generate, getActiveAgentName, isAgentActive, cancelCurrentCall } from './ai/index.js';
-import { rerank, isRerankerEnabled } from './reranker.js';
+import { rerank, findSimilar, isRerankerEnabled } from './reranker.js';
 import { buildSystemPrompt } from './context.js';
 import { synthesize } from './tts.js';
-import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setPref, setSessionContext, setSessionStart } from './state.js';
+import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setPref, setSessionContext, setSessionStart, getRecentPlays, peekNext } from './state.js';
 import { broadcast } from './ws-broadcast.js';
 import { resolveTracksOrdered } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
@@ -337,20 +337,75 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // when the last current song is nearly done. Generating it here would race and steal the intro.
   const shouldSynthesize = !!djResponse.say && (hasTracks || chatSpeakOn) && !isAutoRefill;
 
+  // Current playing song — used for similar-song intent
+  const _plays = getRecentPlays(1);
+  const _queued = peekNext();
+  const activeSong = _plays[0] ?? (_queued[0] ? { title: _queued[0].title, artist: _queued[0].artist } : null);
+
+  // ── Expand candidate pool for reranker ────────────────────────────────────────
+  // Merge play + candidates (DJ nominates extra songs without speaking about them).
+  // play[0] is the song the DJ announced in say — it stays locked as first track.
+  // The reranker freely reorders play[1:] + candidates and we take the best subset.
+  const extraCandidates = djResponse.candidates ?? [];
+  let rerankerPool = djResponse.play ?? [];
+  if (hasMusicCandidates && extraCandidates.length > 0) {
+    const seen = new Set((rerankerPool).map(t => `${t.title}___${t.artist ?? ''}`));
+    const fresh = extraCandidates.filter(t => !seen.has(`${t.title}___${t.artist ?? ''}`));
+    rerankerPool = [...rerankerPool, ...fresh];
+    console.log(`[Router:${triggerType}] ${ts()} reranker pool: ${rerankerPool.length} (${djResponse.play?.length ?? 0} play + ${fresh.length} candidates)`);
+  }
+
+  // ── "Similar to current song" intent ─────────────────────────────────────────
+  // When the user asks for music similar to what's playing, supplement the pool
+  // with DB results from findSimilar() so the reranker has acoustically close songs.
+  const isSimilarRequest = triggerType === 'user-chat' &&
+    /\b(similar|like this|same vibe|more like|sounds like|songs like|something like)\b/i.test(trimmed);
+  if (isSimilarRequest && isRerankerEnabled() && activeSong) {
+    console.log(`[Router:${triggerType}] ${ts()} similar-song intent detected — querying DB for "${activeSong.title ?? activeSong.resolvedTitle}"`);
+    const simResults = await findSimilar(
+      { title: activeSong.resolvedTitle ?? activeSong.title, artist: activeSong.resolvedArtist ?? activeSong.artist },
+      20,
+    ).catch(() => null);
+    if (simResults?.length) {
+      const simSeen = new Set(rerankerPool.map(t => `${t.title}___${t.artist ?? ''}`));
+      const simFresh = simResults
+        .filter(r => !simSeen.has(`${r.title}___${r.artist ?? ''}`))
+        .map(r => ({ title: r.title, artist: r.artist, source: r.source ?? 'any' }));
+      rerankerPool = [...rerankerPool, ...simFresh];
+      console.log(`[Router:${triggerType}] ${ts()} similar-song: added ${simFresh.length} DB candidates (pool now ${rerankerPool.length})`);
+    }
+  }
+
   console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS + reranker in parallel${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
   const [resolveResult, ttsResult, rerankResult] = await Promise.allSettled([
     hasTracks ? resolveTracksOrdered(djResponse.play) : Promise.resolve([]),
     shouldSynthesize ? synthesize(djResponse.say) : Promise.resolve(null),
-    (hasMusicCandidates && isRerankerEnabled()) ? rerank(djResponse.play) : Promise.resolve(null),
+    (hasMusicCandidates && isRerankerEnabled()) ? rerank(rerankerPool) : Promise.resolve(null),
   ]);
 
   // ── Apply reranker ordering to resolved tracks ────────────────────────────────
-  // If reranker finished in time, re-sort resolvedTracks to match the ranked order.
-  // The AI's pass-1 intro stays as-is (no pass-2 — reranker runs in parallel now).
+  // play[0] is locked (DJ announced it in say). Reranker can freely order play[1:] + candidates.
+  // We then take the top play.length songs from the reranked pool as the final queue.
   if (rerankResult.status === 'fulfilled' && rerankResult.value?.length) {
     const ranked = rerankResult.value;
-    console.log(`[Router:${triggerType}] ${ts()} reranker done — top: "${ranked[0]?.title}" by ${ranked[0]?.artist}`);
-    djResponse = { ...djResponse, play: ranked };
+    const playLen = djResponse.play?.length ?? ranked.length;
+    const lockedFirst = djResponse.play?.[0];
+
+    // Log before/after order for debugging
+    const aiOrder = (djResponse.play ?? []).slice(0, 5).map(t => `"${t.title}"`).join(' → ');
+    const rerankOrder = ranked.slice(0, 5).map(t => `"${t.title}"`).join(' → ');
+    console.log(`[Router:${triggerType}] ${ts()} reranker done — AI order: ${aiOrder}`);
+    console.log(`[Router:${triggerType}] ${ts()} reranker done — top: "${ranked[0]?.title}" by ${ranked[0]?.artist} | reranked: ${rerankOrder}`);
+
+    // Rebuild play list: keep play[0] locked, fill remaining slots from reranked pool
+    if (lockedFirst && ranked.length > 1) {
+      const lockedKey = `${lockedFirst.title}___${lockedFirst.artist ?? ''}`;
+      const rest = ranked.filter(t => `${t.title}___${t.artist ?? ''}` !== lockedKey);
+      const finalPlay = [lockedFirst, ...rest].slice(0, playLen);
+      djResponse = { ...djResponse, play: finalPlay };
+    } else {
+      djResponse = { ...djResponse, play: ranked.slice(0, playLen) };
+    }
   } else if (rerankResult.status === 'rejected') {
     console.warn(`[Router:${triggerType}] reranker skipped:`, rerankResult.reason?.message);
   }
