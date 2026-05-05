@@ -9,8 +9,9 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const CODEX_BIN   = process.env.CODEX_BIN   ?? 'codex';
-// Only override model if explicitly set — otherwise let ~/.codex/config.toml decide
-const CODEX_MODEL = process.env.CODEX_MODEL ?? null;
+// Default to a cheaper local Codex CLI model for this app.
+// Override via CODEX_MODEL env var if you need a different Codex-capable model.
+const CODEX_MODEL = process.env.CODEX_MODEL ?? 'gpt-5.4-mini';
 
 const JSON_INSTRUCTION = `
 Respond ONLY with a single JSON object (no markdown, no extra text) with these fields:
@@ -45,7 +46,7 @@ export async function generate(systemPrompt, userMessage) {
   try {
     await runCLI(CODEX_BIN, args);
     const text = readFileSync(outPath, 'utf8').trim();
-    console.log(`[Codex] model=${CODEX_MODEL ?? '(config default)'}`);
+    console.log(`[Codex] model=${CODEX_MODEL}`);
     console.log(`[Codex] raw response (first 400): ${text.slice(0, 400)}`);
     return parseOutput(text);
   } finally {

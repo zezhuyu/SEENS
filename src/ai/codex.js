@@ -21,9 +21,9 @@ if (!existsSync(join(CODEX_WORKSPACE, '.git'))) {
 }
 
 const CODEX_BIN   = process.env.CODEX_BIN   ?? 'codex';
-// Leave empty to use codex's built-in default (the ChatGPT account default).
-// gpt-4o-mini and other API-only models are NOT supported with ChatGPT accounts.
-const CODEX_MODEL = process.env.CODEX_MODEL ?? '';
+// Default to a cheaper local Codex CLI model for this app.
+// Override via CODEX_MODEL env var if you need a different Codex-capable model.
+const CODEX_MODEL = process.env.CODEX_MODEL ?? 'gpt-5.4-mini';
 
 let currentProc = null;
 

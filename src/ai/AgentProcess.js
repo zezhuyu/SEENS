@@ -70,10 +70,9 @@ const BACKEND      = (process.env.AI_AGENT ?? 'claude').toLowerCase();
 const CLAUDE_BIN   = process.env.CLAUDE_BIN   ?? 'claude';
 const CODEX_BIN    = process.env.CODEX_BIN    ?? 'codex';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5';
-// CODEX_MODEL: leave empty to use codex's built-in default (the ChatGPT account default).
-// Override via CODEX_MODEL env var if you need a specific model.
-// Note: gpt-4o-mini and other API-only models are NOT supported with ChatGPT accounts.
-const CODEX_MODEL  = process.env.CODEX_MODEL  ?? '';
+// Default to a cheaper local Codex CLI model for this app.
+// Override via CODEX_MODEL env var if you need a different Codex-capable model.
+const CODEX_MODEL  = process.env.CODEX_MODEL  ?? 'gpt-5.4-mini';
 
 const START_TIME   = Date.now();
 

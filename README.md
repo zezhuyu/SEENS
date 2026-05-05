@@ -91,6 +91,8 @@ NODE_ENV=development
 AI_AGENT=claude          # or: codex
 ```
 
+When `AI_AGENT=codex`, the app defaults the Codex CLI model to `gpt-5.4-mini` to save tokens. Override it with `CODEX_MODEL=...` if you want a different Codex-capable model.
+
 No API key needed here — the agent runs through the CLI you installed above. If you want to use the Codex adapter with a direct OpenAI API key instead of the `codex` CLI:
 
 ```env
