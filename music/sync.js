@@ -77,7 +77,54 @@ export async function syncAll({ force = false } = {}) {
 
   console.log(`[Sync] Done. ${deduped.length} unique tracks across ${Object.keys(results).filter(k => k !== 'errors').length} services.`);
   if (results.errors.length) console.warn('[Sync] Errors:', results.errors);
+
+  // ── Seed reranker in background ───────────────────────────────────────────
+  // Kick off embedding for the top 200 library tracks + discoveries.
+  // Runs in background — downloads 60s audio clips + embeds all 3 models.
+  // Lyrics are fetched from lrclib and passed so BGE gets real lyrics, not
+  // just "title artist" fallback.
+  _seedRerankerBackground(deduped).catch(err =>
+    console.warn('[Sync] Reranker seed error:', err.message)
+  );
+
   return deduped;
+}
+
+async function _seedRerankerBackground(tracks) {
+  const { isRerankerEnabled, isSubprocessRunning, seedLibrary } = await import('../src/reranker.js');
+  if (!isRerankerEnabled() || !isSubprocessRunning()) return;
+
+  const { fetchLyricsBatch } = await import('./lyrics.js');
+
+  const top200 = tracks.slice(0, 200);
+  console.log(`[Sync] Seeding reranker with ${top200.length} tracks (background)…`);
+
+  // Fetch lyrics for all tracks in parallel before seeding so BGE gets real lyrics.
+  const lyricsList = await fetchLyricsBatch(top200);
+  const withLyrics = top200.map((t, i) => ({
+    ...t,
+    lyrics: lyricsList[i] ?? undefined,  // undefined → sync.py uses its own fallback
+  }));
+
+  const result = await seedLibrary(withLyrics, { limit: 200 });
+  console.log(`[Sync] Reranker seed done — ok=${result.ok} skip=${result.skipped} fail=${result.fail}`);
+
+  // Also seed discoveries if available
+  const discPath = userPath('discoveries.json');
+  if (fs.existsSync(discPath)) {
+    try {
+      const discoveries = JSON.parse(fs.readFileSync(discPath, 'utf8'));
+      if (discoveries?.length) {
+        const discTop = discoveries.slice(0, 200);
+        const discLyrics = await fetchLyricsBatch(discTop);
+        const discWithLyrics = discTop.map((t, i) => ({ ...t, lyrics: discLyrics[i] ?? undefined }));
+        const discResult = await seedLibrary(discWithLyrics, { limit: 200 });
+        console.log(`[Sync] Reranker seed (discoveries) done — ok=${discResult.ok} skip=${discResult.skipped}`);
+      }
+    } catch (err) {
+      console.warn('[Sync] Discovery seed failed:', err.message);
+    }
+  }
 }
 
 async function syncService(service, results) {

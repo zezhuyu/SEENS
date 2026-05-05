@@ -34,7 +34,7 @@ You MUST respond with a single valid JSON object. No markdown, no code fences, n
 
 ### Standard Rules
 - `say` is spoken via TTS — keep it natural, avoid special characters
-- `play` lists 2-5 songs when generating a session, 1-2 for a quick next-track response
+- `play` lists 8-10 songs when generating a session, 1-2 for a quick next-track response
 - If the user asks a question, answer it in `say` and still suggest songs in `play`
 - `playIntent` controls when the requested tracks play:
   - `"now"` — **interrupt current music**, DJ speaks immediately, then track plays (user said "play X", "I want to hear X", "put on X", unqualified requests)

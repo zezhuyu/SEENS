@@ -215,6 +215,11 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
       agent.start().catch(err => console.error('[Server] AI agent failed to start:', err.message));
     });
 
+    // Auto-spawn reranker subprocess if it was enabled in a previous session.
+    import('./src/reranker.js').then(({ isRerankerEnabled, enableReranker }) => {
+      if (isRerankerEnabled()) enableReranker();
+    });
+
     // Start scheduler after server is up
     import('./src/scheduler.js').then(({ startScheduler }) => startScheduler());
 

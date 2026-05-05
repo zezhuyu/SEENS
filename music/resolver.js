@@ -141,16 +141,20 @@ async function searchYouTube(title, artist) {
     } catch { /* try next query */ }
   }
 
-  // Reject title-only matches (score=0) when the artist has searchable words —
-  // common title words like "mine", "home", "love" appear in thousands of videos
-  // and without an artist hit we'd return the wrong song.
+  // Reject title-only matches (score=0) — common words appear in thousands of videos.
   if (bestScore === 0 && artistWds.length > 0) {
     console.warn(`[Resolver] yt rejected title-only match for "${artist} — ${title}" (artist not found in results)`);
     bestVideoId = null;
   }
 
+  // Reject artist-only matches (score=1) — wrong song by the right artist.
+  if (bestScore === 1 && titleWds.length > 0) {
+    console.warn(`[Resolver] yt rejected artist-only match for "${artist} — ${title}" (title not found in results)`);
+    bestVideoId = null;
+  }
+
   if (bestVideoId) {
-    const label = bestScore === 2 ? 'artist+title' : 'artist match only';
+    const label = bestScore === 2 ? 'artist+title' : bestScore === 1 ? 'artist match only' : 'partial match';
     console.log(`[Resolver] yt "${title}" by "${artist}" → ${bestVideoId} (${label})`);
   } else {
     console.warn(`[Resolver] yt no confident match for "${artist} — ${title}"`);

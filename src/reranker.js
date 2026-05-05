@@ -21,19 +21,22 @@ import path               from 'path';
 import { fileURLToPath }  from 'url';
 import { getPref, setPref } from './state.js';
 import { getWeatherContext } from './weather.js';
+import { fetchLyricsBatch } from '../music/lyrics.js';
 
 const ROOT          = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const DEFAULT_SCRIPT = path.join(ROOT, 'music-reranker', 'subprocess_main.py');
 const RERANKER_URL  = process.env.RERANKER_URL ?? 'http://127.0.0.1:7480';
-const CONNECT_TIMEOUT = 3_000;
-const RERANK_TIMEOUT  = 30_000;   // model inference can be slow on first call
+const CONNECT_TIMEOUT  = 3_000;
+const RERANK_TIMEOUT   = 120_000;   // model inference once loaded (runs in parallel — latency ok)
+const WARMUP_TIMEOUT   = 15 * 60_000; // first run may download model from HuggingFace
 
 // ─── Subprocess state ─────────────────────────────────────────────────────────
 
-let _proc      = null;
-let _rl        = null;
-let _pending   = new Map();   // id → { resolve, reject }
-let _idCounter = 0;
+let _proc          = null;
+let _rl            = null;
+let _pending       = new Map();   // id → { resolve, reject }
+let _idCounter     = 0;
+let _warmupPromise = null;        // resolves true (ready) or false (failed) once model is loaded
 
 function _scriptPath() {
   return process.env.RERANKER_SCRIPT
@@ -53,6 +56,7 @@ function _pythonBin(scriptPath) {
 }
 
 function _spawnSubprocess() {
+  _warmupPromise = null;
   const script = _scriptPath();
   const python  = _pythonBin(script);
   console.log(`[Reranker] spawning subprocess: ${python} ${script}`);
@@ -127,10 +131,25 @@ export function enableReranker() {
     }
     try {
       _spawnSubprocess();
+      _warmup();
     } catch (err) {
       console.error('[Reranker] failed to spawn subprocess:', err.message);
     }
   }
+}
+
+function _warmup() {
+  // Models are eagerly loaded at subprocess startup — use `health` to wait for
+  // them without any DB writes (avoids "database is locked" when two processes
+  // share the DB during development).
+  console.log('[Reranker] waiting for subprocess — model may download from HuggingFace on first run (up to 15 min)');
+  _warmupPromise = _call('health', {}, WARMUP_TIMEOUT)
+    .then(h => {
+      const loaded = Object.values(h?.models_loaded ?? {}).filter(Boolean).length;
+      console.log(`[Reranker] warm-up done — ${loaded} model(s) ready`);
+      return true;
+    })
+    .catch(err => { console.warn('[Reranker] warm-up failed (non-fatal):', err.message); return false; });
 }
 
 /**
@@ -160,26 +179,35 @@ export async function disableReranker() {
 export async function rerank(candidates, contextOverrides = {}) {
   if (!candidates?.length || !isRerankerEnabled()) return null;
 
-  const context = await _buildContext(contextOverrides);
-  const songs   = candidates.map(t => ({
+  // Fetch real lyrics for all candidates in parallel (5 s timeout each).
+  // Better lyrics → richer BGE embeddings → more accurate reranking.
+  const [context, lyricsList] = await Promise.all([
+    _buildContext(contextOverrides),
+    fetchLyricsBatch(candidates),
+  ]);
+
+  const songs = candidates.map((t, i) => ({
     id:     t.uri ?? `${t.title}___${t.artist}`,
     title:  t.title,
     artist: t.artist ?? '',
     source: t.source ?? 'any',
-    lyrics: `${t.title} ${t.artist}`,
+    lyrics: lyricsList[i] ?? `${t.title} ${t.artist ?? ''}`,
   }));
 
   // ── Subprocess path (preferred) ─────────────────────────────────────────────
   if (isSubprocessRunning()) {
-    try {
-      const result = await _call('rerank', {
-        candidates: songs,
-        context,
-        top_k: songs.length,
-      });
-      return _mapBack(result?.songs ?? result, candidates);
-    } catch (err) {
-      console.warn('[Reranker] subprocess call failed:', err.message, '— trying HTTP');
+    // Wait for warm-up to finish before the real call — ensures models are loaded.
+    // If warmup failed (e.g. transient DB lock), still attempt the real call;
+    // the DB may be free by now and real inference doesn't need warmup to succeed.
+    if (_warmupPromise) await _warmupPromise;
+
+    if (isSubprocessRunning()) {
+      try {
+        const result = await _call('rerank', { candidates: songs, context, top_k: songs.length }, RERANK_TIMEOUT);
+        return _mapBack(result?.songs ?? result, candidates);
+      } catch (err) {
+        console.warn('[Reranker] subprocess call failed:', err.message, '— trying HTTP');
+      }
     }
   }
 

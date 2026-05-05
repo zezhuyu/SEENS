@@ -324,51 +324,12 @@ export async function handleInput(input, triggerType = 'user-chat') {
     broadcast('session-context', { context: djResponse.sessionContext });
   }
 
-  // ── Reranker pass (optional) ────────────────────────────────────────────────
-  // Only runs when reranker module is enabled AND reachable AND DJ has music tracks.
-  // Plugin tracks (audioUrl already resolved) are skipped — no point reranking.
-  const hasMusicCandidates = djResponse.play?.length > 0 && !djResponse.pluginAction;
-  if (hasMusicCandidates && isRerankerEnabled()) {
-    try {
-      const ranked = await rerank(djResponse.play);
-      if (ranked?.length) {
-        console.log(`[Router:${triggerType}] ${ts()} reranker done — top: "${ranked[0]?.title}" by ${ranked[0]?.artist}`);
-
-        // Pass 2: tell the DJ the exact reranked tracks so its intro matches what will play.
-        // This is a lightweight follow-up in the same persistent agent session.
-        const rankedList = ranked
-          .map((t, i) => `${i + 1}. "${t.title}" by ${t.artist}`)
-          .join('\n');
-        const pass2Msg =
-          `Here's the confirmed playlist — introduce it to the listener now:\n${rankedList}\n\n` +
-          `You're on air. For the first track, share a real story, recording detail, or lyric ` +
-          `meaning that makes the listener feel like an insider. Lead with the song or the story. ` +
-          `Use segue to tease the next track. Set play to these exact tracks in this exact order.`;
-
-        try {
-          const pass2 = await generate(systemPrompt, pass2Msg);
-          if (pass2?.say) {
-            djResponse = { ...djResponse, play: ranked, say: pass2.say };
-            console.log(`[Router:${triggerType}] ${ts()} pass-2 intro: "${pass2.say.slice(0, 100)}"`);
-          } else {
-            djResponse = { ...djResponse, play: ranked };
-          }
-        } catch (err) {
-          // Pass-2 failed — keep pass-1 intro, use reranked order
-          console.warn(`[Router:${triggerType}] pass-2 intro failed:`, err.message);
-          djResponse = { ...djResponse, play: ranked };
-        }
-      }
-    } catch (err) {
-      console.warn(`[Router:${triggerType}] reranker skipped:`, err.message);
-    }
-  }
-
   // Note: finalSay may be corrected after resolve — message stored after resolve step
 
-  // Resolve tracks + synthesize TTS in parallel
-  // For conversational responses (no tracks), respect the chatSpeak preference.
-  // Song intros always get TTS regardless.
+  // ── Resolve tracks + TTS + reranker all in parallel ──────────────────────────
+  // Reranker runs alongside resolve/TTS so it never blocks music from starting.
+  // Plugin tracks (audioUrl already resolved) are skipped — no point reranking.
+  const hasMusicCandidates = djResponse.play?.length > 0 && !djResponse.pluginAction;
   const hasTracks = djResponse.play?.length > 0;
   const chatSpeakOn = getPref('tts.chatSpeak', '1') !== '0';
   const isAutoRefill = triggerType === 'auto-refill';
@@ -376,11 +337,23 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // when the last current song is nearly done. Generating it here would race and steal the intro.
   const shouldSynthesize = !!djResponse.say && (hasTracks || chatSpeakOn) && !isAutoRefill;
 
-  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS in parallel${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
-  const [resolveResult, ttsResult] = await Promise.allSettled([
+  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS + reranker in parallel${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
+  const [resolveResult, ttsResult, rerankResult] = await Promise.allSettled([
     hasTracks ? resolveTracksOrdered(djResponse.play) : Promise.resolve([]),
     shouldSynthesize ? synthesize(djResponse.say) : Promise.resolve(null),
+    (hasMusicCandidates && isRerankerEnabled()) ? rerank(djResponse.play) : Promise.resolve(null),
   ]);
+
+  // ── Apply reranker ordering to resolved tracks ────────────────────────────────
+  // If reranker finished in time, re-sort resolvedTracks to match the ranked order.
+  // The AI's pass-1 intro stays as-is (no pass-2 — reranker runs in parallel now).
+  if (rerankResult.status === 'fulfilled' && rerankResult.value?.length) {
+    const ranked = rerankResult.value;
+    console.log(`[Router:${triggerType}] ${ts()} reranker done — top: "${ranked[0]?.title}" by ${ranked[0]?.artist}`);
+    djResponse = { ...djResponse, play: ranked };
+  } else if (rerankResult.status === 'rejected') {
+    console.warn(`[Router:${triggerType}] reranker skipped:`, rerankResult.reason?.message);
+  }
 
   let resolvedTracks = [];
   const defaultIntent = (triggerType === 'user-chat' && hasTracks) ? 'now' : 'end';
@@ -397,7 +370,27 @@ export async function handleInput(input, triggerType = 'user-chat') {
   const addToQueue = (intent === 'now' || intent === 'next') ? enqueueNext : enqueue;
 
   if (resolveResult.status === 'fulfilled') {
-    resolvedTracks = resolveResult.value;
+    let resolvedRaw = resolveResult.value;
+    // Re-sort resolved tracks to match reranked order when available
+    if (rerankResult.status === 'fulfilled' && rerankResult.value?.length) {
+      const ranked = rerankResult.value;
+      // Index resolved tracks by BOTH their resolved URI (yt:VIDEO_ID) and title___artist,
+      // because ranked items carry the original candidate URI (null for AI-picked songs)
+      // while resolved tracks have uri updated to yt:VIDEO_ID after resolution.
+      const byId = new Map();
+      for (const t of resolvedRaw) {
+        const titleKey = `${t.title}___${t.artist}`;
+        if (t.uri) byId.set(t.uri, t);
+        byId.set(titleKey, t);
+      }
+      const reordered = ranked
+        .map(r => byId.get(r.uri) ?? byId.get(`${r.title}___${r.artist}`) ?? null)
+        .filter(Boolean);
+      // Append any resolved tracks that didn't appear in ranked result (safety net)
+      const reorderedSet = new Set(reordered.map(t => t.uri ?? `${t.title}___${t.artist}`));
+      resolvedRaw = [...reordered, ...resolvedRaw.filter(t => !reorderedSet.has(t.uri ?? `${t.title}___${t.artist}`))];
+    }
+    resolvedTracks = resolvedRaw;
     try {
       addToQueue(resolvedTracks);
       console.log(`[Router:${triggerType}] ${ts()} resolve done — ${resolvedTracks.length}/${djResponse.play?.length ?? 0} tracks (intent=${intent})`);
