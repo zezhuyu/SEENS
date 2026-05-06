@@ -29,7 +29,10 @@ export function getAuthenticatedClient() {
   const accessToken = getPref('youtube.access_token');
   const refreshToken = getPref('youtube.refresh_token');
   if (!accessToken) throw new Error('YouTube not authenticated. Run npm run setup.');
-  client.setCredentials({ access_token: accessToken, refresh_token: refreshToken });
+  const expiryDate = parseInt(getPref('youtube.expires_at', '0')) || undefined;
+  // Pass expiry_date so googleapis knows proactively when to refresh instead of
+  // sending the expired token and waiting for a 401.
+  client.setCredentials({ access_token: accessToken, refresh_token: refreshToken, expiry_date: expiryDate });
   client.on('tokens', saveTokens);
   return client;
 }

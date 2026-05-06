@@ -226,6 +226,10 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
     // Background location auto-refresh (runs immediately, then every hour)
     import('./src/location.js').then(({ startLocationRefresh }) => startLocationRefresh());
 
+    // Proactive OAuth token refresh — keeps Spotify/YouTube/Google/Microsoft tokens
+    // perpetually valid so scheduled sessions never hit an expired token.
+    import('./src/token-refresh.js').then(({ startTokenRefresh }) => startTokenRefresh());
+
     // TTS cache pruning once a day
     import('./src/tts.js').then(({ pruneCache }) => {
       pruneCache();

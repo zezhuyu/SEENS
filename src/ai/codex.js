@@ -39,6 +39,7 @@ Respond ONLY with a single JSON object (no markdown, no extra text) with these f
 {
   "say": "<string — what you say aloud, never empty>",
   "play": [{"title":"<string>","artist":"<string>","source":"<spotify|apple|youtube|any>"}],
+  "candidates": [{"title":"<string>","artist":"<string>","source":"<spotify|apple|youtube|any>"}],
   "reason": "<string>",
   "segue": "<string>",
   "pluginCall": {"plugin":"<name>","endpoint":"<name>","params":{}} | null,
@@ -50,7 +51,9 @@ Respond ONLY with a single JSON object (no markdown, no extra text) with these f
     "text": "<description or summary — for type=rest-piece>",
     "sourceUrl": "<original URL — optional>"
   } | null
-}`;
+}
+
+IMPORTANT: When play has 3 or more songs, you MUST also populate candidates with 10-15 additional songs that fit the same mood/energy. The recommendation engine scores play + candidates together to find the best matches — an empty candidates list means worse results. Omit candidates only for quick 1-2 track responses.`;
 
 export async function generate(systemPrompt, userMessage) {
   const fullPrompt = `${systemPrompt}\n${JSON_INSTRUCTION}\n\n---\nUser: ${userMessage}`;
@@ -94,7 +97,8 @@ function parseOutput(text) {
 function normalize(obj) {
   return {
     say:          String(obj.say ?? ''),
-    play:         Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
+    play:         Array.isArray(obj.play)       ? obj.play.map(normalizeTrack)       : [],
+    candidates:   Array.isArray(obj.candidates) ? obj.candidates.map(normalizeTrack) : [],
     reason:       String(obj.reason ?? ''),
     segue:        String(obj.segue ?? ''),
     pluginCall:   obj.pluginCall?.plugin ? obj.pluginCall   : null,

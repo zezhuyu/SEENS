@@ -46,28 +46,36 @@ export async function exchangeCode(code) {
   return data;
 }
 
+let _refreshInFlight = null;
+
 async function getAccessToken() {
   const expiresAt = parseInt(getPref('google.expires_at', '0'));
   if (Date.now() < expiresAt - 30_000) return getPref('google.access_token');
 
+  if (_refreshInFlight) return _refreshInFlight;
+
   const refreshToken = getPref('google.refresh_token');
   if (!refreshToken) throw new Error('Google Calendar not authenticated');
 
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: process.env.GOOGLE_CLIENT_ID,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    }),
-  });
-  if (!res.ok) throw new Error(`Google refresh error: ${await res.text()}`);
-  const data = await res.json();
-  setPref('google.access_token', data.access_token);
-  setPref('google.expires_at', String(Date.now() + data.expires_in * 1000));
-  return data.access_token;
+  _refreshInFlight = (async () => {
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token',
+      }),
+    });
+    if (!res.ok) throw new Error(`Google refresh error: ${await res.text()}`);
+    const data = await res.json();
+    setPref('google.access_token', data.access_token);
+    setPref('google.expires_at', String(Date.now() + data.expires_in * 1000));
+    return data.access_token;
+  })().finally(() => { _refreshInFlight = null; });
+
+  return _refreshInFlight;
 }
 
 // Returns today's events as a short summary string

@@ -50,29 +50,40 @@ export async function exchangeCode(code, verifier) {
   return data;
 }
 
+// In-flight refresh lock — prevents concurrent callers from each POSTing to
+// Spotify with the same refresh_token. Spotify rotates tokens on first use;
+// the second concurrent request would get "Failed to remove token".
+let _refreshInFlight = null;
+
 export async function getAccessToken() {
   const expiresAt = parseInt(getPref('spotify.expires_at', '0'));
   if (Date.now() < expiresAt - 30_000) {
     return getPref('spotify.access_token');
   }
-  // Refresh
+  // If a refresh is already in progress, wait for it and return the new token.
+  if (_refreshInFlight) return _refreshInFlight;
+
   const refreshToken = getPref('spotify.refresh_token');
   if (!refreshToken) throw new Error('Spotify not authenticated. Run npm run setup.');
 
-  const body = new URLSearchParams({
-    client_id: CLIENT_ID,
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-  });
-  const res = await fetch('https://accounts.spotify.com/api/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
-  if (!res.ok) throw new Error(`Spotify refresh error: ${await res.text()}`);
-  const data = await res.json();
-  saveTokens(data);
-  return data.access_token;
+  _refreshInFlight = (async () => {
+    const body = new URLSearchParams({
+      client_id: CLIENT_ID,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    });
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    if (!res.ok) throw new Error(`Spotify refresh error: ${await res.text()}`);
+    const data = await res.json();
+    saveTokens(data);
+    return data.access_token;
+  })().finally(() => { _refreshInFlight = null; });
+
+  return _refreshInFlight;
 }
 
 function saveTokens(data) {

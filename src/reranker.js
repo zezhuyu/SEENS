@@ -50,6 +50,10 @@ let _idCounter     = 0;
 let _warmupPromise = null;        // resolves true (ready) or false (failed) once model is loaded
 let _restartTimer  = null;        // debounce handle for auto-restart
 
+export function isRerankerInstalled() {
+  try { return fs.existsSync(_scriptPath()); } catch { return false; }
+}
+
 function _scriptPath() {
   return process.env.RERANKER_SCRIPT
       ?? getPref('reranker.script', null)
@@ -136,7 +140,7 @@ function _call(method, params, timeoutMs = RERANK_TIMEOUT) {
 // ─── Public lifecycle ─────────────────────────────────────────────────────────
 
 export function isRerankerEnabled() {
-  return getPref('reranker.enabled', '0') === '1';
+  return isRerankerInstalled() && getPref('reranker.enabled', '0') === '1';
 }
 
 export function isSubprocessRunning() {
@@ -354,6 +358,25 @@ export async function findSimilar(track, limit = 20) {
     return result?.songs ?? null;
   } catch (err) {
     console.warn('[Reranker] findSimilar failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Ask the reranker to suggest songs from its own DB based on taste + current context.
+ * Used as a fallback when the DJ's candidates repeatedly fail the score threshold.
+ *
+ * @param {number} limit — how many songs to return
+ * @returns {Promise<Array|null>}
+ */
+export async function recommend(limit = 10) {
+  if (!isRerankerEnabled() || !isSubprocessRunning()) return null;
+  try {
+    const context = await _buildContext({});
+    const result  = await _call('recommend', { limit, context }, 60_000);
+    return result?.songs ?? null;
+  } catch (err) {
+    console.warn('[Reranker] recommend failed:', err.message);
     return null;
   }
 }

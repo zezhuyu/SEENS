@@ -23,8 +23,8 @@ function refillFromHistory() {
   const recent = getRecentPlays(10);
   const artists = [...new Set(recent.map(p => p.artist).filter(Boolean))].slice(0, 5);
   const prompt = artists.length
-    ? `Based on my recent listening history (${artists.join(', ')}), queue 4 more tracks I'll enjoy. Vary the mood and avoid repeating what was just played.`
-    : 'Queue 4 tracks based on my taste profile and the current time of day.';
+    ? `Based on my recent listening history (${artists.join(', ')}), queue 8 more tracks I'll enjoy. Vary the mood and avoid repeating what was just played. Also include 10-15 candidates for the recommendation engine.`
+    : 'Queue 8 tracks based on my taste profile and the current time of day. Also include 10-15 candidates for the recommendation engine.';
 
   console.log('[Queue] Low — auto-refilling from history');
   handleInput(prompt, 'auto-refill')

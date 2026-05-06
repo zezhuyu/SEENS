@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { getPref, setPref, clearQueue, setSessionStart, getSessionContext } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgentName, agentStatus, agentReset } from '../src/ai/index.js';
 import { isRerankerEnabled, enableReranker, disableReranker, isSubprocessRunning, getHealth as getRerankerHealth, seedPlaylist, seedLibrary } from '../src/reranker.js';
+import { reloadSchedule, regenerateSchedule } from '../src/scheduler.js';
 import { ensureUserDir, userPath, readUserFile, readUserJSON } from '../src/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -185,6 +186,35 @@ router.get('/story-interests', getStory);      router.post('/story-interests', p
 router.get('/routines',        getRoutines);   router.post('/routines',        postRoutines);
 router.get('/mood-rules',      getMoodRules);  router.post('/mood-rules',      postMoodRules);
 router.get('/taste',           getTaste);      router.post('/taste',           postTaste);
+
+// GET  /api/settings/schedule — return current schedule.json sessions
+// POST /api/settings/schedule/reload — re-read schedule.json and reschedule cron jobs
+router.get('/schedule', (req, res) => {
+  try {
+    const data = fs.readFileSync(userPath('schedule.json'), 'utf8');
+    res.json({ sessions: JSON.parse(data) });
+  } catch {
+    res.json({ sessions: [] });
+  }
+});
+router.post('/schedule/reload', (req, res) => {
+  try {
+    const sessions = reloadSchedule();
+    res.json({ ok: true, sessions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/settings/schedule/regenerate — re-run AI generation from routines.md + mood-rules.md
+router.post('/schedule/regenerate', async (req, res) => {
+  try {
+    const sessions = await regenerateSchedule();
+    res.json({ ok: true, sessions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/settings/env-keys — current values masked (first 4 chars + ****)
 router.get('/env-keys', (req, res) => {

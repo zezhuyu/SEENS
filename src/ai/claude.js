@@ -16,9 +16,10 @@ const DJ_SCHEMA = JSON.stringify({
   type: 'object',
   properties: {
     say:    { type: 'string' },
-    play:   { type: 'array', items: { type: 'object' } },
-    reason: { type: 'string' },
-    segue:  { type: 'string' },
+    play:       { type: 'array', items: { type: 'object' } },
+    candidates: { type: 'array', items: { type: 'object' }, description: 'REQUIRED when play has 3+ songs: 10-15 additional songs for the recommendation engine — not spoken aloud. Omit only for 1-2 track quick responses.' },
+    reason:     { type: 'string' },
+    segue:      { type: 'string' },
     pluginCall: {
       type: 'object',
       description: 'Optional. Request data from a plugin. Set only if you need external data to answer. Leave "play" empty when using this.',
@@ -85,6 +86,7 @@ function normalize(obj) {
   return {
     say:            String(obj.say ?? ''),
     play:           Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
+    candidates:     Array.isArray(obj.candidates) ? obj.candidates.map(normalizeTrack) : [],
     reason:         String(obj.reason ?? ''),
     segue:          String(obj.segue ?? ''),
     playIntent:     obj.playIntent     ?? null,
