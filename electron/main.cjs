@@ -116,6 +116,23 @@ let serverPort = null;
 
 let tray       = null;
 let mainWindow = null;
+let trayStatus = { state: 'idle', title: 'Seens Radio', artist: '' };
+
+function normalizeTrayText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function updateTrayTitle() {
+  if (!tray) return;
+  const state = normalizeTrayText(trayStatus.state).toLowerCase();
+  const title = normalizeTrayText(trayStatus.title);
+  const artist = normalizeTrayText(trayStatus.artist);
+  const iconText = state === 'playing' ? '▶' : state === 'paused' ? '❚❚' : '•';
+  const now = title ? `${title}${artist ? ` — ${artist}` : ''}` : 'Seens Radio';
+  const display = `${iconText} ${now}`.slice(0, 48);
+  tray.setTitle(display);
+  tray.setToolTip(`Seens Radio\n${state ? `${state.toUpperCase()}: ${now}` : now}`);
+}
 
 // ── Start Express server in-process ──────────────────────────────────────────
 // Dynamic import() bridges CJS → ESM cleanly without a child process.
@@ -251,6 +268,7 @@ function createTray() {
 
   tray = new Tray(icon);
   tray.setToolTip('Seens Radio');
+  updateTrayTitle();
 
   const menu = Menu.buildFromTemplate([
     { label: 'Show', click: () => { if (isWindowAlive(mainWindow)) mainWindow.show(); else createWindow(serverPort); } },
@@ -285,6 +303,14 @@ app.whenReady().then(async () => {
     if (!mainWindow) return { width: 380, height: 700 };
     const [width, height] = mainWindow.getSize();
     return { width, height };
+  });
+  ipcMain.on('set-tray-status', (_event, payload = {}) => {
+    trayStatus = {
+      state: payload.state || 'idle',
+      title: payload.title || 'Seens Radio',
+      artist: payload.artist || '',
+    };
+    updateTrayTitle();
   });
 
   if (USE_EPHEMERAL_SERVER_PORT) {

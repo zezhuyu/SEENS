@@ -1747,6 +1747,13 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   useEffect(() => { startedRef.current = started; }, [started]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { categoryFilterRef.current = categoryFilter; }, [categoryFilter]);
+  useEffect(() => {
+    if (!isElectron || !window.__electron__?.setTrayStatus) return;
+    const title = currentTrack?.resolvedTitle ?? currentTrack?.title ?? 'Seens Radio';
+    const artist = currentTrack?.resolvedArtist ?? currentTrack?.artist ?? '';
+    const state = playing ? 'playing' : (currentTrack ? 'paused' : 'idle');
+    window.__electron__.setTrayStatus({ state, title, artist });
+  }, [isElectron, playing, currentTrack]);
 
   // ── auto-detect location once on mount
   // Primary: navigator.geolocation (GPS/WiFi via macOS Location Services — accurate)

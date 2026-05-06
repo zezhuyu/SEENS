@@ -4,4 +4,5 @@ contextBridge.exposeInMainWorld('__electron__', {
   isElectron: true,
   resizeWindow: (w, h) => ipcRenderer.invoke('resize-window', w, h),
   getWindowSize: ()    => ipcRenderer.invoke('get-window-size'),
+  setTrayStatus: (status) => ipcRenderer.send('set-tray-status', status),
 });
