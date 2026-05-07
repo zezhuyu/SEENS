@@ -242,49 +242,105 @@ router.post('/env-keys', (req, res) => {
   res.json({ ok: true, updated });
 });
 
-// POST /api/settings/reranker/seed-library — embed tracks from connected music services
-// Reads playlists.json (synced library), searches YouTube for each, downloads + embeds.
-// Takes up to `perSource` tracks per connected source so all services are represented.
+// POST /api/settings/reranker/seed-library — embed tracks from ALL connected music services.
+// Fetches liked/library songs live from each connected service at click time so the seed
+// always reflects the current library, not whatever was cached in playlists.json.
 router.post('/reranker/seed-library', async (req, res) => {
   if (!isRerankerEnabled() || !isSubprocessRunning()) {
     return res.status(503).json({ error: 'Reranker not running — enable it first' });
   }
-  const raw = readUserJSON('playlists.json');
-  const allTracks = Array.isArray(raw) ? raw : [];
-  if (!allTracks.length) {
-    return res.status(400).json({ error: 'No tracks in library — sync a music service first' });
-  }
+
   const perSource = parseInt(req.body?.limit) || 200;
+  const connected = {
+    spotify: !!getPref('spotify.access_token'),
+    youtube: !!getPref('youtube.access_token'),
+    apple:   !!getPref('apple.user_token'),
+  };
 
-  // Group by source, cap each at perSource, then combine — all sources represented equally
-  const bySource = new Map();
-  for (const t of allTracks) {
-    const src = t.source ?? 'unknown';
-    if (!bySource.has(src)) bySource.set(src, []);
-    if (bySource.get(src).length < perSource) bySource.get(src).push(t);
+  if (!connected.spotify && !connected.youtube && !connected.apple) {
+    return res.status(400).json({ error: 'No music services connected — connect Spotify, YouTube, or Apple Music in settings first' });
   }
-  const tracks = [...bySource.values()].flat();
 
-  // Also include any saved YouTube playlist URLs as additional sources
+  // Fetch liked/library tracks live from every connected service in parallel.
+  // Each service is isolated — a failure in one never blocks the others.
+  const fetched = { spotify: [], youtube: [], apple: [] };
+  const errors  = [];
+
+  await Promise.all([
+    connected.spotify && (async () => {
+      try {
+        const { syncLikedSongs } = await import('../music/spotify.js');
+        fetched.spotify = (await syncLikedSongs(perSource)).slice(0, perSource);
+        console.log(`[SeedLibrary] Spotify: ${fetched.spotify.length} liked songs`);
+      } catch (err) {
+        errors.push(`spotify: ${err.message}`);
+        console.warn('[SeedLibrary] Spotify fetch failed:', err.message);
+      }
+    })(),
+
+    connected.youtube && (async () => {
+      try {
+        const { syncLikedVideos } = await import('../music/youtube.js');
+        fetched.youtube = (await syncLikedVideos()).slice(0, perSource);
+        console.log(`[SeedLibrary] YouTube: ${fetched.youtube.length} liked videos`);
+      } catch (err) {
+        errors.push(`youtube: ${err.message}`);
+        console.warn('[SeedLibrary] YouTube fetch failed:', err.message);
+      }
+    })(),
+
+    connected.apple && (async () => {
+      try {
+        const { syncLibrarySongs } = await import('../music/apple-music.js');
+        fetched.apple = (await syncLibrarySongs()).slice(0, perSource);
+        console.log(`[SeedLibrary] Apple Music: ${fetched.apple.length} library songs`);
+      } catch (err) {
+        errors.push(`apple: ${err.message}`);
+        console.warn('[SeedLibrary] Apple Music fetch failed:', err.message);
+      }
+    })(),
+  ].filter(Boolean));
+
+  // Deduplicate across services by title::artist (keeps first-seen source)
+  const allFetched = [...fetched.spotify, ...fetched.youtube, ...fetched.apple].filter(Boolean);
+  const seen = new Map();
+  for (const t of allFetched) {
+    if (!t?.title) continue;
+    const key = `${t.title.toLowerCase().trim()}::${(t.artist ?? '').toLowerCase().trim()}`;
+    if (!seen.has(key)) seen.set(key, t);
+  }
+  const tracks = [...seen.values()];
+
+  if (!tracks.length) {
+    return res.status(400).json({
+      error: errors.length
+        ? `All services failed — ${errors.join('; ')}`
+        : 'No tracks found in your connected libraries',
+    });
+  }
+
   const savedPlaylists = JSON.parse(getPref('reranker.saved_playlists', '[]'));
-  const sourceBreakdown = [...bySource.entries()].map(([s,v]) => `${s}:${v.length}`);
+  const sourceBreakdown = Object.entries(fetched)
+    .filter(([, v]) => v.length > 0)
+    .map(([s, v]) => `${s}:${v.length}`);
   if (savedPlaylists.length) sourceBreakdown.push(`saved_playlists:${savedPlaylists.length}`);
+  if (errors.length) console.warn('[SeedLibrary] partial failures:', errors);
 
   res.json({ ok: true, total: tracks.length, message: `Seeding started (${sourceBreakdown.join(', ')})` });
 
-  // Seed library tracks first, then saved playlist URLs sequentially
+  // Seed library tracks, then saved playlist URLs — all in background
   (async () => {
     try {
       await seedLibrary(tracks, { limit: tracks.length });
     } catch (err) {
-      console.warn('[Settings] seed-library error:', err.message);
+      console.warn('[SeedLibrary] seed error:', err.message);
     }
     for (const playlistUrl of savedPlaylists) {
       try {
-        console.log(`[Settings] seeding saved playlist: ${playlistUrl}`);
+        console.log(`[SeedLibrary] seeding saved playlist: ${playlistUrl}`);
         await seedPlaylist(playlistUrl, { limit: perSource, downloadAudio: true });
       } catch (err) {
-        console.warn(`[Settings] saved playlist seed error (${playlistUrl}):`, err.message);
+        console.warn(`[SeedLibrary] saved playlist seed error (${playlistUrl}):`, err.message);
       }
     }
   })();

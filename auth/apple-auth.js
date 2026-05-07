@@ -34,12 +34,27 @@ export function getDeveloperToken() {
   return token;
 }
 
-// User token is obtained via MusicKit JS in the browser
-// The PWA posts it to /api/apple-token and we store it here
+// User token is obtained via MusicKit JS in the browser (a signed JWT).
+// Decode the JWT payload to extract the real `exp` claim so we can detect expiry.
 export function saveUserToken(token) {
   setPref('apple.user_token', token);
+  try {
+    const payload = JSON.parse(
+      Buffer.from(token.split('.')[1], 'base64url').toString('utf8')
+    );
+    const expiresAt = payload.exp
+      ? payload.exp * 1000
+      : Date.now() + 170 * 24 * 60 * 60 * 1000; // fallback: 170 days
+    setPref('apple.user_token_expires_at', String(expiresAt));
+  } catch {
+    setPref('apple.user_token_expires_at', String(Date.now() + 170 * 24 * 60 * 60 * 1000));
+  }
 }
 
 export function getUserToken() {
   return getPref('apple.user_token');
+}
+
+export function getUserTokenExpiresAt() {
+  return parseInt(getPref('apple.user_token_expires_at', '0'));
 }
