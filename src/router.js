@@ -407,40 +407,66 @@ export async function handleInput(input, triggerType = 'user-chat') {
     }
   }
 
-  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS + reranker in parallel${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
+  // Reranker is optional. Give it a short foreground budget; if it is cold,
+  // unavailable, crashed, or slow, keep the DJ-generated playlist/intro instead
+  // of holding playback for the full model/RPC timeout.
+  const RERANK_SOFT_TIMEOUT_MS = 20_000;
+  const optionalRerank = (hasMusicCandidates && isRerankerEnabled())
+    ? new Promise(resolve => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          console.warn(`[Router:${triggerType}] ${ts()} reranker soft-timeout — using DJ playlist directly`);
+          resolve(null);
+        }, RERANK_SOFT_TIMEOUT_MS);
+        rerank(rerankerPool)
+          .then(result => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(result);
+          })
+          .catch(err => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            console.warn(`[Router:${triggerType}] ${ts()} reranker unavailable — using DJ playlist directly:`, err.message);
+            resolve(null);
+          });
+      })
+    : Promise.resolve(null);
+
+  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS + optional reranker in parallel${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
   const [resolveResult, ttsResult, rerankResult] = await Promise.allSettled([
     hasTracks ? resolveTracksOrdered(djResponse.play) : Promise.resolve([]),
     shouldSynthesize ? synthesize(djResponse.say) : Promise.resolve(null),
-    (hasMusicCandidates && isRerankerEnabled()) ? rerank(rerankerPool) : Promise.resolve(null),
+    optionalRerank,
   ]);
 
   // ── Apply reranker ordering to resolved tracks ────────────────────────────────
-  // play[0] is locked (DJ announced it in say). Reranker can freely order play[1:] + candidates.
-  // We then take the top play.length songs from the reranked pool as the final queue.
+  // The reranker owns the final playable order. Earlier versions locked play[0]
+  // because the DJ intro was generated before reranking, but that made the UI
+  // ignore the top reranker result. We now reorder the queue by reranker score and
+  // correct the spoken intro later if the first playable track changes.
 
   // ── Score threshold + retry loop ─────────────────────────────────────────────
   // Songs are filtered by reranker_score >= threshold (configurable via settings).
   // When no fill songs pass (and trigger is background), DJ is re-called up to
   // RERANK_MAX_RETRIES times. After all retries, the reranker DB fallback fires.
-  // play[0] is always kept regardless of score — it was announced by the DJ in say.
+  // The top reranked playable song is allowed to become first.
 
   const RERANK_MAX_RETRIES = 3;
   const _thresholdRaw = getPref('reranker.score_threshold', null);
   const scoreThreshold = _thresholdRaw !== null ? parseFloat(_thresholdRaw) : null;
   const _songKey = t => `${t.title ?? ''}___${t.artist ?? ''}`;
 
-  // Keys for the original play list — only these songs were resolved by
-  // resolveTracksOrdered() and can actually be queued. DB candidates (from
-  // recommend()/findSimilar()) are scoring context only: they improve the
-  // reranker's relative scoring but cannot replace play songs because they
-  // were never passed through yt-dlp resolution.
-  const _originalPlayKeys = new Set((djResponse.play ?? []).map(_songKey));
-
-  function _applyThreshold(ranked, lockedKey) {
+  function _applyThreshold(ranked) {
     if (!ranked?.length) return [];
-    // Only keep songs from the original play list — filter out DB candidates
-    // that snuck in via pool expansion (they have no resolved audio URL).
-    const fill = ranked.filter(t => _songKey(t) !== lockedKey && _originalPlayKeys.has(_songKey(t)));
+    // Keep the reranker's real top songs, including AI candidates and DB
+    // auto-candidates. We resolve the final reranked playlist after scoring, so
+    // candidates are playable instead of serving as score-only context.
+    const fill = ranked;
     if (scoreThreshold === null) return fill;        // no threshold — return all
     return fill.filter(t => (t.reranker_score ?? 0) >= scoreThreshold);
   }
@@ -453,16 +479,13 @@ export async function handleInput(input, triggerType = 'user-chat') {
   if (rerankResult.status === 'fulfilled' && rerankResult.value?.length) {
     const ranked    = rerankResult.value;
     const playLen   = djResponse.play?.length ?? ranked.length;
-    const lockedFirst = djResponse.play?.[0];
-    const lockedKey   = lockedFirst ? _songKey(lockedFirst) : null;
-
     const aiOrder    = (djResponse.play ?? []).slice(0, 5).map(t => `"${t.title}"`).join(' → ');
     const rerankOrder = ranked.slice(0, 5).map(t => `"${t.title}"`).join(' → ');
     const dropped    = ranked.length - playLen;
     console.log(`[Router:${triggerType}] ${ts()} reranker done — pool ${ranked.length} → keep ${playLen}${dropped > 0 ? ` (dropped ${dropped} low-score)` : ''} | AI order: ${aiOrder}`);
     console.log(`[Router:${triggerType}] ${ts()} reranker done — top: "${ranked[0]?.title}" by ${ranked[0]?.artist} | reranked: ${rerankOrder}`);
 
-    let qualifiedFill = _applyThreshold(ranked, lockedKey);
+    let qualifiedFill = _applyThreshold(ranked);
 
     // Retry loop: only for background triggers (not user-chat, where the user explicitly asked)
     const canRetry = triggerType !== 'user-chat' && scoreThreshold !== null;
@@ -497,8 +520,7 @@ export async function handleInput(input, triggerType = 'user-chat') {
 
         const retryRanked = await rerank(retryPool).catch(() => null);
         if (retryRanked?.length) {
-          const retryLockedKey = retryDjResponse.play?.[0] ? _songKey(retryDjResponse.play[0]) : null;
-          qualifiedFill = _applyThreshold(retryRanked, retryLockedKey);
+          qualifiedFill = _applyThreshold(retryRanked);
           if (qualifiedFill.length > 0) {
             finalDjResponse = retryDjResponse;
             console.log(`[Router:${triggerType}] ${ts()} retry ${retries} succeeded — ${qualifiedFill.length} songs above threshold`);
@@ -517,20 +539,14 @@ export async function handleInput(input, triggerType = 'user-chat') {
           dbFallbackSongs = qualifiedFill;   // flag for re-resolve after loop
           console.log(`[Router:${triggerType}] ${ts()} DB fallback: ${qualifiedFill.length} songs from reranker library — will search + download via yt-dlp`);
         } else {
-          console.warn(`[Router:${triggerType}] ${ts()} DB fallback empty — using raw AI list`);
-          qualifiedFill = ranked.filter(t => lockedKey ? _songKey(t) !== lockedKey : true);
+          console.warn(`[Router:${triggerType}] ${ts()} DB fallback empty — using raw reranked list`);
+          qualifiedFill = ranked;
         }
       }
     }
 
-    // Rebuild final play list: locked play[0] + qualified fill up to playLen
-    const finalLockedFirst = finalDjResponse.play?.[0];
-    if (finalLockedFirst) {
-      const finalPlay = [finalLockedFirst, ...qualifiedFill].slice(0, playLen);
-      finalDjResponse = { ...finalDjResponse, play: finalPlay };
-    } else {
-      finalDjResponse = { ...finalDjResponse, play: qualifiedFill.slice(0, playLen) };
-    }
+    // Rebuild final play list directly from reranker order.
+    finalDjResponse = { ...finalDjResponse, play: qualifiedFill.slice(0, playLen) };
     finalRanked = ranked;
 
   } else if (rerankResult.status === 'rejected') {
@@ -554,25 +570,24 @@ export async function handleInput(input, triggerType = 'user-chat') {
 
   const addToQueue = (intent === 'now' || intent === 'next') ? enqueueNext : enqueue;
 
-  // When DB fallback was used, the earlier resolveTracksOrdered() ran on the original DJ list —
-  // not on these DB-sourced songs. Re-resolve now so yt-dlp searches and downloads them.
-  if (dbFallbackSongs?.length) {
+  // If reranker changed the final playlist, resolve that final order now. The
+  // parallel resolve above only covered the original DJ play[] list, before
+  // candidates/DB recommendations were allowed to win.
+  const needsFreshResolve = (finalRanked?.length || dbFallbackSongs?.length) && djResponse.play?.length;
+  if (needsFreshResolve) {
     try {
-      console.log(`[Router:${triggerType}] ${ts()} DB fallback: resolving ${dbFallbackSongs.length} songs via yt-dlp`);
-      resolvedTracks = await resolveTracksOrdered(dbFallbackSongs);
+      console.log(`[Router:${triggerType}] ${ts()} resolving final reranked playlist (${djResponse.play.length} songs) via yt-dlp`);
+      resolvedTracks = await resolveTracksOrdered(djResponse.play);
       addToQueue(resolvedTracks);
-      console.log(`[Router:${triggerType}] ${ts()} DB fallback resolve done — ${resolvedTracks.length} tracks queued (intent=${intent})`);
+      console.log(`[Router:${triggerType}] ${ts()} final reranked resolve done — ${resolvedTracks.length}/${djResponse.play?.length ?? 0} tracks queued (intent=${intent})`);
       prewarmCache(resolvedTracks.map(t => t.videoId));
     } catch (err) {
-      console.warn(`[Router:${triggerType}] ${ts()} DB fallback resolve failed:`, err.message);
-      try { addToQueue(dbFallbackSongs.map(t => ({ source: t.source ?? 'any', title: t.title, artist: t.artist ?? '', uri: null }))); } catch {}
+      console.warn(`[Router:${triggerType}] ${ts()} final reranked resolve failed:`, err.message);
+      try { addToQueue(djResponse.play.map(t => ({ source: t.source ?? 'any', title: t.title, artist: t.artist ?? '', uri: null }))); } catch {}
     }
   } else if (resolveResult.status === 'fulfilled') {
     let resolvedRaw = resolveResult.value;
-    // Re-sort resolved tracks to match the FINAL play order (play[0] locked by DJ announcement).
-    // Use djResponse.play (post-lock) as the ordering source — NOT rerankResult.value which has
-    // the raw reranker ranking and doesn't respect the play[0] lock. Using raw reranker order
-    // would push play[0] to whatever position its score fell, breaking the DJ's introduction.
+    // Re-sort resolved tracks to match the FINAL reranker-selected play order.
     const finalPlayOrder = djResponse.play?.length ? djResponse.play : null;
     if (finalPlayOrder?.length) {
       const byId = new Map();
@@ -617,41 +632,90 @@ export async function handleInput(input, triggerType = 'user-chat') {
     console.log(`[Router:${triggerType}] ${ts()} play[0] unresolvable — firstTrack shifted to "${firstPlayable.resolvedTitle ?? firstPlayable.title}"`);
   }
 
-  // Detect and fix AI say/track mismatch (AI hallucinated a different song in say).
-  // Skip for plugin tracks — the DJ intro doesn't need to literally contain the episode title.
+  // Final DJ intro must be based on the actual queued order, not the AI's
+  // pre-rerank guess. If the reranker changed the session, ask the DJ to write a
+  // fresh intro from the resolved/reranked playlist, then synthesize that text.
   let finalSay = djResponse.say;
   let ttsUrl = null;
+  let finalSayChanged = false;
 
-  if (firstTrack && finalSay && firstTrack.source !== 'plugin') {
+  const trackForIntro = t => ({
+    title:  t.resolvedTitle  ?? t.title  ?? '',
+    artist: t.resolvedArtist ?? t.artist ?? '',
+  });
+  const introPlaylist = (resolvedTracks.length ? resolvedTracks : (djResponse.play ?? []))
+    .map(trackForIntro)
+    .filter(t => t.title);
+
+  const playlistChangedAfterDjDraft = !!finalRanked?.length ||
+    (resolvedTracks[0] && firstPlayable && firstPlayable !== resolvedTracks[0]);
+
+  if (playlistChangedAfterDjDraft && introPlaylist.length > 0 && finalRanked?.length && firstTrack?.source !== 'plugin') {
+    const introPrompt = [
+      'The recommendation engine has reranked the playlist after your first draft.',
+      'Write a fresh, concise DJ intro for the FINAL playlist order below.',
+      'The first sentence must introduce the first track exactly as the first song.',
+      'Do not mention or imply any song outside this final playlist.',
+      'Keep the same listener intent and vibe from the original user request.',
+      '',
+      `Original user request: ${trimmed}`,
+      `Previous intro, now stale: ${finalSay ?? ''}`,
+      'Final playlist order:',
+      ...introPlaylist.slice(0, 12).map((t, i) => `${i + 1}. ${t.title}${t.artist ? ` — ${t.artist}` : ''}`),
+      '',
+      'Return JSON. Only the say field matters; keep play/candidates empty.'
+    ].join('\n');
+
+    const introResponse = await generate(systemPrompt, introPrompt).catch(err => {
+      console.warn(`[Router:${triggerType}] reranked-intro AI call failed:`, err.message);
+      return null;
+    });
+    if (introResponse?.say) {
+      finalSay = introResponse.say;
+      finalSayChanged = true;
+      console.log(`[Router:${triggerType}] ${ts()} reranked intro generated for final playlist — say="${finalSay.slice(0, 120)}"`);
+    }
+  }
+
+  // Safety net: if the generated intro still does not name the actual first
+  // playable track, replace it with a deterministic one-track intro rather than
+  // allowing stale TTS/text to announce a different song.
+  if (playlistChangedAfterDjDraft && firstTrack && finalSay && firstTrack.source !== 'plugin') {
     const title = (firstTrack.resolvedTitle ?? firstTrack.title ?? '').toLowerCase();
-    // Only correct when say explicitly names a different song — not when it's a vibe/story intro.
-    // Heuristic: say is a mismatch if it contains none of the firstTrack title words AND is short
-    // (likely a bare re-announcement of a wrong track), OR if it directly names a recently played song.
     const sayLower = finalSay.toLowerCase();
     const titleWords = title.split(/\s+/).filter(w => w.length > 3);
     const titleMissing = titleWords.length > 0 && !titleWords.some(w => sayLower.includes(w));
-    const isShortBare = finalSay.length < 60 && titleMissing;  // bare "Song by Artist" style wrong announcement
-    if (isShortBare) {
+    if (titleMissing) {
       const displayTitle  = firstTrack.resolvedTitle  ?? firstTrack.title;
       const displayArtist = firstTrack.resolvedArtist ?? firstTrack.artist ?? '';
-      finalSay = displayArtist ? `${displayTitle} by ${displayArtist}` : displayTitle;
-      console.log(`[Router:${triggerType}] ${ts()} say mismatch — replaced with actual track: "${finalSay}"`);
-      const corrected = await synthesize(finalSay).catch(err => {
-        console.warn(`[Router:${triggerType}] TTS re-synth error:`, err.message);
-        return null;
-      });
-      if (corrected) ttsUrl = corrected.url;
+      finalSay = displayArtist
+        ? `First up is ${displayTitle} by ${displayArtist}.`
+        : `First up is ${displayTitle}.`;
+      finalSayChanged = true;
+      console.log(`[Router:${triggerType}] ${ts()} say/firstTrack mismatch — fallback intro: "${finalSay}"`);
     }
   }
 
+  if (finalSayChanged && shouldSynthesize) {
+    const corrected = await synthesize(finalSay).catch(err => {
+      console.warn(`[Router:${triggerType}] TTS re-synth error:`, err.message);
+      return null;
+    });
+    if (corrected) ttsUrl = corrected.url;
+  }
+
   if (!ttsUrl) {
-    if (ttsResult.status === 'fulfilled' && ttsResult.value) {
+    if (!finalSayChanged && ttsResult.status === 'fulfilled' && ttsResult.value) {
       ttsUrl = ttsResult.value.url;
       console.log(`[Router:${triggerType}] ${ts()} TTS done → ${ttsUrl}`);
-    } else if (ttsResult.status === 'rejected') {
+    } else if (!finalSayChanged && ttsResult.status === 'rejected') {
       console.error(`[Router:${triggerType}] ${ts()} TTS error:`, ttsResult.reason?.message);
+    } else if (finalSayChanged && shouldSynthesize) {
+      console.warn(`[Router:${triggerType}] ${ts()} updated intro has no TTS — suppressing stale pre-rerank audio`);
     }
   }
+
+  djResponse = { ...djResponse, say: finalSay };
 
   if (!agentActive) addMessage('assistant', finalSay);
   console.log(`[Router:${triggerType}] ${ts()} broadcasting — firstTrack="${firstTrack?.resolvedTitle ?? firstTrack?.title ?? 'none'}" videoId=${firstTrack?.videoId ?? 'null'}`);
