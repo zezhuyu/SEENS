@@ -1190,7 +1190,10 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
                       try {
                         const res = await fetch('/api/settings/reranker/binary', {
                           method: 'PUT',
-                          headers: { 'Content-Type': 'application/octet-stream' },
+                          headers: {
+                            'Content-Type': 'application/octet-stream',
+                            'X-Reranker-Filename': file.name,
+                          },
                           body: file,
                         });
                         const data = await res.json();
@@ -1206,7 +1209,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
                     }}
                   />
                 </label>
-                <span className="settings-row-sub" style={{ marginBottom:0 }}>Drop the compiled reranker executable here.</span>
+                <span className="settings-row-sub" style={{ marginBottom:0 }}>Drop the compiled reranker executable or .zip package here.</span>
               </div>
               <div className="settings-row-sub" style={{ marginBottom:0 }}>
                 Installed binary: {reranker?.binaryPath || 'none yet'}

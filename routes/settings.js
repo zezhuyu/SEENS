@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import { getPref, setPref, clearQueue, setSessionStart, getSessionContext, getSessionMood, getSessionMoodLabel } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgentName, agentStatus, agentReset } from '../src/ai/index.js';
 import { isRerankerEnabled, enableReranker, disableReranker, isSubprocessRunning, getHealth as getRerankerHealth, seedPlaylist, seedLibrary } from '../src/reranker.js';
@@ -59,8 +60,42 @@ const ROUTINES_PATH        = userPath('routines.md');
 const MOOD_RULES_PATH      = userPath('mood-rules.md');
 const TASTE_PATH           = userPath('taste.md');
 const RERANKER_BINARY_PATH  = userPath('reranker', 'seens-reranker');
+const RERANKER_PACKAGE_DIR  = userPath('reranker', 'seens-reranker-package');
 
 const router = express.Router();
+
+function removeIfExists(p) {
+  try { fs.rmSync(p, { recursive: true, force: true }); } catch {}
+}
+
+function signExecutable(executablePath) {
+  const signingRoot = executablePath.startsWith(RERANKER_PACKAGE_DIR)
+    ? RERANKER_PACKAGE_DIR
+    : executablePath;
+  try { execFileSync('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', signingRoot], { stdio: 'ignore' }); } catch {}
+  try { execFileSync('/usr/bin/xattr', ['-dr', 'com.apple.provenance', signingRoot], { stdio: 'ignore' }); } catch {}
+  try {
+    execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', executablePath], { stdio: 'pipe' });
+  } catch (err) {
+    const stderr = err.stderr?.toString?.() || err.message;
+    throw new Error(`codesign failed: ${stderr}`);
+  }
+}
+
+function findPackagedReranker(rootDir) {
+  const queue = [rootDir];
+  for (let depth = 0; queue.length && depth < 5; depth++) {
+    const level = queue.splice(0);
+    for (const dir of level) {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        if (entry.isFile() && entry.name === 'seens-reranker') return p;
+        if (entry.isDirectory() && !entry.name.startsWith('__MACOSX')) queue.push(p);
+      }
+    }
+  }
+  return null;
+}
 
 // GET /api/settings — all user-facing prefs
 router.get('/', (req, res) => {
@@ -140,9 +175,15 @@ router.get('/reranker', async (req, res) => {
 // POST /api/settings/reranker — enable (spawns subprocess) or disable (kills it)
 router.post('/reranker', async (req, res) => {
   const { enabled, scriptPath, binaryPath } = req.body;
-  const restartNeeded = isSubprocessRunning() && (scriptPath !== undefined || binaryPath !== undefined);
-  if (scriptPath !== undefined) setPref('reranker.script', scriptPath || null);
-  if (binaryPath !== undefined) setPref('reranker.binary', binaryPath || null);
+  const currentScript = getPref('reranker.script', null);
+  const currentBinary = getPref('reranker.binary', '');
+  const nextScript = scriptPath !== undefined ? (scriptPath || null) : currentScript;
+  const nextBinary = binaryPath !== undefined ? (binaryPath || null) : currentBinary;
+  const pathChanged = (scriptPath !== undefined && nextScript !== currentScript) ||
+    (binaryPath !== undefined && nextBinary !== currentBinary);
+  const restartNeeded = isSubprocessRunning() && pathChanged;
+  if (scriptPath !== undefined) setPref('reranker.script', nextScript);
+  if (binaryPath !== undefined) setPref('reranker.binary', nextBinary);
   if (restartNeeded) {
     await disableReranker();
   }
@@ -154,11 +195,12 @@ router.post('/reranker', async (req, res) => {
   res.json({ enabled: !!enabled, running: isSubprocessRunning() });
 });
 
-// PUT /api/settings/reranker/binary — upload a standalone reranker executable
+// PUT /api/settings/reranker/binary — upload a standalone executable or zipped onedir package
 router.put('/reranker/binary', async (req, res) => {
   try {
     ensureUserDir();
     fs.mkdirSync(path.dirname(RERANKER_BINARY_PATH), { recursive: true });
+    const uploadedName = String(req.headers['x-reranker-filename'] || '').toLowerCase();
     const tmpPath = `${RERANKER_BINARY_PATH}.upload-${Date.now()}`;
     let bytes = 0;
     const out = fs.createWriteStream(tmpPath, { mode: 0o755 });
@@ -176,9 +218,41 @@ router.put('/reranker/binary', async (req, res) => {
 
     out.on('finish', async () => {
       try {
-        fs.chmodSync(tmpPath, 0o755);
-        fs.renameSync(tmpPath, RERANKER_BINARY_PATH);
-        setPref('reranker.binary', RERANKER_BINARY_PATH);
+        let installedPath = RERANKER_BINARY_PATH;
+
+        const isZip = uploadedName.endsWith('.zip') || (() => {
+          const fd = fs.openSync(tmpPath, 'r');
+          try {
+            const sig = Buffer.alloc(4);
+            fs.readSync(fd, sig, 0, 4, 0);
+            return sig[0] === 0x50 && sig[1] === 0x4b;
+          } finally {
+            fs.closeSync(fd);
+          }
+        })();
+
+        if (isZip) {
+          const extractDir = `${RERANKER_PACKAGE_DIR}.upload-${Date.now()}`;
+          removeIfExists(extractDir);
+          fs.mkdirSync(extractDir, { recursive: true });
+          execFileSync('/usr/bin/ditto', ['-x', '-k', tmpPath, extractDir]);
+
+          const executable = findPackagedReranker(extractDir);
+          if (!executable) throw new Error('No seens-reranker executable found in uploaded package');
+
+          removeIfExists(RERANKER_PACKAGE_DIR);
+          fs.renameSync(path.dirname(executable), RERANKER_PACKAGE_DIR);
+          removeIfExists(extractDir);
+          try { fs.unlinkSync(tmpPath); } catch {}
+          installedPath = path.join(RERANKER_PACKAGE_DIR, 'seens-reranker');
+        } else {
+          fs.chmodSync(tmpPath, 0o755);
+          fs.renameSync(tmpPath, RERANKER_BINARY_PATH);
+        }
+
+        fs.chmodSync(installedPath, 0o755);
+        signExecutable(installedPath);
+        setPref('reranker.binary', installedPath);
 
         const shouldRestart = getPref('reranker.enabled', '0') === '1';
         if (shouldRestart) {
@@ -186,7 +260,7 @@ router.put('/reranker/binary', async (req, res) => {
           enableReranker();
         }
 
-        res.json({ ok: true, bytes, binaryPath: RERANKER_BINARY_PATH, restarted: shouldRestart });
+        res.json({ ok: true, bytes, binaryPath: installedPath, restarted: shouldRestart });
       } catch (err) {
         try { fs.unlinkSync(tmpPath); } catch {}
         if (!res.headersSent) res.status(500).json({ error: err.message });

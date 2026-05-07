@@ -338,8 +338,9 @@ function refreshTrayMenu() {
     res.on('end', () => {
       try {
         const data = JSON.parse(raw);
-        // queue[0] is what's playing; we want [1..5] as "up next"
-        trayQueue = (data.queue ?? []).slice(1, 6);
+        // /api/now?full=1 returns the upcoming queue only, so keep the first
+        // item — it is the next song to play — and cap the tray list at 5.
+        trayQueue = (data.queue ?? []).slice(0, 5);
       } catch {}
       tray.setContextMenu(buildTrayMenu());
     });

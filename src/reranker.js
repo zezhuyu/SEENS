@@ -31,6 +31,7 @@ import { fetchLyricsBatch } from '../music/lyrics.js';
 const ROOT          = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const DEFAULT_SCRIPT = path.join(ROOT, 'seens-reranker', 'subprocess_main.py');
 const DEFAULT_BINARY = userPath('reranker', 'seens-reranker');
+const DEFAULT_BINARY_PACKAGE = userPath('reranker', 'seens-reranker-package', 'seens-reranker');
 
 // ─── Canonical song ID ────────────────────────────────────────────────────────
 // Must match Python's _canonical_key() in seens-reranker/reranker/sync.py:
@@ -55,6 +56,8 @@ let _pending       = new Map();   // id → { resolve, reject }
 let _idCounter     = 0;
 let _warmupPromise = null;        // resolves true (ready) or false (failed) once model is loaded
 let _restartTimer  = null;        // debounce handle for auto-restart
+let _stopRequested = false;       // suppress restart when disableReranker() intentionally stops it
+let _restartAttempts = 0;         // bounded crash-loop protection
 
 export function isRerankerInstalled() {
   try { return !!_launchTarget(); } catch { return false; }
@@ -72,15 +75,30 @@ function _scriptPath() {
       ?? DEFAULT_SCRIPT;
 }
 
-function _launchTarget() {
+function _binaryLaunchTarget() {
   const binary = _binaryPath();
   if (binary && fs.existsSync(binary)) {
     const stat = fs.statSync(binary);
     if (stat.isFile()) {
       return { kind: 'binary', command: binary, args: [], cwd: path.dirname(binary) };
     }
+    if (stat.isDirectory()) {
+      for (const rel of ['seens-reranker', 'Contents/MacOS/seens-reranker']) {
+        const candidate = path.join(binary, rel);
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+          return { kind: 'binary', command: candidate, args: [], cwd: path.dirname(candidate) };
+        }
+      }
+    }
   }
 
+  if (fs.existsSync(DEFAULT_BINARY_PACKAGE) && fs.statSync(DEFAULT_BINARY_PACKAGE).isFile()) {
+    return { kind: 'binary', command: DEFAULT_BINARY_PACKAGE, args: [], cwd: path.dirname(DEFAULT_BINARY_PACKAGE) };
+  }
+  return null;
+}
+
+function _scriptLaunchTarget() {
   const script = _scriptPath();
   if (script && fs.existsSync(script)) {
     const repoRoot = path.dirname(script);
@@ -95,15 +113,21 @@ function _launchTarget() {
   return null;
 }
 
+function _launchTarget() {
+  return _binaryLaunchTarget() ?? _scriptLaunchTarget();
+}
+
 function _spawnSubprocess() {
+  if (isSubprocessRunning()) return;
   _warmupPromise = null;
+  _stopRequested = false;
   const launch = _launchTarget();
   if (!launch) throw new Error('No reranker binary or script available');
   console.log(`[Reranker] spawning subprocess: ${launch.command} ${launch.args.join(' ')}`);
   _proc = spawn(launch.command, launch.args, {
     cwd: launch.cwd ?? process.cwd(),
     stdio: ['pipe', 'pipe', 'inherit'],
-    env: { ...process.env },
+    env: { ...process.env, SEENS_RERANKER_MANAGED: '1' },
   });
 
   let _spawnFailed = false;
@@ -117,13 +141,22 @@ function _spawnSubprocess() {
     console.warn(`[Reranker] subprocess exited (code=${code} signal=${signal})`);
     _proc = null;
     _rl   = null;
+    _warmupPromise = null;
     // Reject any in-flight calls
     for (const [, { reject }] of _pending) reject(new Error('Reranker subprocess exited'));
     _pending.clear();
-    // Auto-restart on crash (signal != null) — but not for spawn errors or deliberate disables.
-    if (!_spawnFailed && isRerankerEnabled() && signal !== null) {
-      const delay = 5_000;
-      console.log(`[Reranker] unexpected exit — restarting in ${delay / 1000}s`);
+    // Auto-restart only for unexpected exits. Deliberate shutdowns/restarts
+    // set _stopRequested so we do not immediately loop forever on SIGTERM.
+    const crashed = code !== 0 && signal !== 'SIGTERM';
+    if (!_spawnFailed && !_stopRequested && isRerankerEnabled() && crashed) {
+      _restartAttempts += 1;
+      if (_restartAttempts > 3) {
+        console.warn('[Reranker] crash-loop detected — disabling auto-restart until user toggles reranker');
+        setPref('reranker.enabled', '0');
+        return;
+      }
+      const delay = Math.min(30_000, 5_000 * _restartAttempts);
+      console.log(`[Reranker] unexpected exit — restarting in ${delay / 1000}s (attempt ${_restartAttempts}/3)`);
       clearTimeout(_restartTimer);
       _restartTimer = setTimeout(() => {
         if (!isSubprocessRunning() && isRerankerEnabled()) {
@@ -196,6 +229,7 @@ function _warmup() {
   _warmupPromise = _call('health', {}, WARMUP_TIMEOUT)
     .then(h => {
       const loaded = Object.values(h?.models_loaded ?? {}).filter(Boolean).length;
+      _restartAttempts = 0;
       console.log(`[Reranker] warm-up done — ${loaded} model(s) ready`);
       return true;
     })
@@ -208,6 +242,7 @@ function _warmup() {
  */
 export async function disableReranker() {
   setPref('reranker.enabled', '0');
+  _stopRequested = true;
   clearTimeout(_restartTimer);
   _restartTimer = null;
   if (isSubprocessRunning()) {
@@ -373,7 +408,7 @@ export async function findSimilar(track, limit = 20) {
   if (!isRerankerEnabled() || !isSubprocessRunning()) return null;
   const song_id = canonicalSongId(track);
   try {
-    const result = await _call('find_similar', { song_id, limit }, 30_000);
+    const result = await _call('find_similar', { song_id, limit }, 60_000);
     return result?.songs ?? null;
   } catch (err) {
     console.warn('[Reranker] findSimilar failed:', err.message);
@@ -392,7 +427,7 @@ export async function recommend(limit = 10) {
   if (!isRerankerEnabled() || !isSubprocessRunning()) return null;
   try {
     const context = await _buildContext({});
-    const result  = await _call('recommend', { limit, context }, 60_000);
+    const result  = await _call('recommend', { limit, context }, 90_000);
     return result?.songs ?? null;
   } catch (err) {
     console.warn('[Reranker] recommend failed:', err.message);
