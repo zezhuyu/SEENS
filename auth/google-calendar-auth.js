@@ -48,7 +48,7 @@ export async function exchangeCode(code) {
 
 let _refreshInFlight = null;
 
-async function getAccessToken() {
+export async function getAccessToken() {
   const expiresAt = parseInt(getPref('google.expires_at', '0'));
   if (Date.now() < expiresAt - 30_000) return getPref('google.access_token');
 
