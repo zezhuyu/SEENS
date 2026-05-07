@@ -113,6 +113,7 @@ body {
 .widget.mini .clock { font-size:68px; justify-content:center; }
 .widget.mini .clock .sec { display:none; }
 .widget.mini .clock-sub { display:none; }
+.widget.mini .clock-mood { display:none; }
 .widget.mini .content-wrap { flex:0 0 auto; }
 .widget.mini .player { padding:10px 18px 14px; gap:10px; flex-shrink:0; border-top:0.5px solid var(--line-soft); }
 .widget.mini .player-top { flex-direction:row; align-items:center; gap:10px; text-align:left; }
@@ -155,6 +156,7 @@ body {
 @keyframes blink { 50%{opacity:.1;} }
 .clock-sub { margin-top:8px; display:flex; align-items:baseline; justify-content:space-between; font-family:var(--font-sans); font-size:13px; color:var(--ink-2); }
 .clock-sub .date { font-family:var(--font-mono); font-size:11px; color:var(--ink-3); letter-spacing:.05em; }
+.clock-mood { margin-top:4px; font-family:var(--font-sans); font-size:12px; color:var(--ink-3); letter-spacing:.02em; text-transform:lowercase; }
 .hero .session-swap { position:absolute; inset:0; padding:inherit; background:var(--surface); display:flex; flex-direction:column; justify-content:center; opacity:0; pointer-events:none; transition:opacity .22s ease; }
 .hero:hover .session-swap { opacity:1; }
 .hero:hover .clock-normal { opacity:0; }
@@ -547,7 +549,11 @@ function ArtReveal({ piece, loading, onDismiss, onReturn, onNext }) {
     );
   }
 
-  const suggestions = [`Who was ${piece.artist.split(' ').slice(-1)[0]}?`, 'Why does this matter?', 'What should I look at next?'];
+  const suggestions = [
+    piece.artist ? `Who was ${piece.artist.split(' ').slice(-1)[0]}?` : 'What is the source?',
+    'Why does this matter?',
+    'What should I look at next?',
+  ];
 
   return (
     <div className="art-reveal">
@@ -583,14 +589,21 @@ function ArtReveal({ piece, loading, onDismiss, onReturn, onNext }) {
           </div>
           <div>
             <div className="art-title">{piece.title}</div>
-            <div className="art-meta">
-              <span>{piece.artist} · {piece.year}</span>
-              {piece.source && <span className="art-source">{piece.source}</span>}
-            </div>
+            {(piece.artist || piece.year || piece.source) && (
+              <div className="art-meta">
+                <span>{[piece.artist, piece.year].filter(Boolean).join(' · ')}</span>
+                {piece.source && <span className="art-source">{piece.source}</span>}
+              </div>
+            )}
           </div>
           <div className="art-caption">{piece.caption}</div>
           {piece.story && <div className="art-caption" style={{ color:'var(--ink-2)', fontSize:'12px' }}>{piece.story}</div>}
           <div className="art-fact">{piece.fact}</div>
+          {piece.audioUrl && (
+            <div style={{ marginTop:6, width:'100%' }}>
+              <audio controls src={piece.audioUrl} style={{ width:'100%' }} />
+            </div>
+          )}
           {piece.cat === 'Music' && piece.searchQuery && (
             <a
               href={`https://music.youtube.com/search?q=${encodeURIComponent(piece.searchQuery)}`}
@@ -690,6 +703,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
   const [manifestDraft, setManifestDraft]           = useState('');
   const [manifestState, setManifestState]           = useState('idle');
   const [reranker, setReranker]                     = useState(null);  // { enabled, running, reachable }
+  const [rerankerBinaryMsg, setRerankerBinaryMsg]   = useState('');
   const [seedUrl, setSeedUrl]                       = useState('');
   const [seedStatus, setSeedStatus]                 = useState(null);  // null | 'loading' | { ok, fail, ... } | { error }
   const [libSeedStatus, setLibSeedStatus]           = useState(null);
@@ -729,6 +743,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
       setMusicConnectors(connectorsRes.status === 'fulfilled' ? connectorsRes.value : []);
       setApiKeys(envKeysRes.status === 'fulfilled' ? envKeysRes.value : {});
       setReranker(rerankerRes.status === 'fulfilled' ? rerankerRes.value : null);
+      setRerankerBinaryMsg('');
     });
   }, [open]);
 
@@ -1160,20 +1175,46 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
                 </span>
               </label>
             </div>
-            <input
-              className="settings-input"
-              style={{ fontSize:11, fontFamily:'var(--font-mono)' }}
-              placeholder="/path/to/seens-reranker/subprocess_main.py"
-              defaultValue={reranker?.scriptPath ?? ''}
-              onBlur={e => {
-                const scriptPath = e.target.value.trim();
-                fetch('/api/settings/reranker', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ enabled: reranker?.enabled ?? false, scriptPath }),
-                }).then(r => r.json()).then(d => setReranker(r => ({ ...r, ...d })));
-              }}/>
-            <div className="settings-row-sub">Full path to subprocess_main.py in seens-reranker</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+                <label className="settings-btn" style={{ cursor:'pointer' }}>
+                  Upload binary
+                  <input
+                    type="file"
+                    accept="*/*"
+                    style={{ display:'none' }}
+                    onChange={async e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setRerankerBinaryMsg(`Uploading ${file.name}…`);
+                      try {
+                        const res = await fetch('/api/settings/reranker/binary', {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/octet-stream' },
+                          body: file,
+                        });
+                        const data = await res.json();
+                        if (!res.ok || data.error) throw new Error(data.error || 'Upload failed');
+                        const fresh = await fetch('/api/settings/reranker').then(r => r.json());
+                        setReranker(fresh);
+                        setRerankerBinaryMsg(`Binary uploaded to ${data.binaryPath}`);
+                      } catch (err) {
+                        setRerankerBinaryMsg(`Upload failed: ${err.message}`);
+                      } finally {
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                </label>
+                <span className="settings-row-sub" style={{ marginBottom:0 }}>Drop the compiled reranker executable here.</span>
+              </div>
+              <div className="settings-row-sub" style={{ marginBottom:0 }}>
+                Installed binary: {reranker?.binaryPath || 'none yet'}
+              </div>
+              {rerankerBinaryMsg && (
+                <div className="settings-row-sub" style={{ marginBottom:0 }}>{rerankerBinaryMsg}</div>
+              )}
+            </div>
           </div>
 
           <div className="settings-row">
@@ -1309,7 +1350,7 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
 
           <div className="settings-row" style={{ flexDirection:'column', alignItems:'stretch' }}>
             <div className="settings-row-label" style={{ marginBottom:6 }}>Listening routines</div>
-            <div className="settings-row-sub" style={{ marginBottom:8 }}>Describe your typical listening patterns — the DJ reads this to plan sessions. Saved to <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>routines.md</code></div>
+            <div className="settings-row-sub" style={{ marginBottom:8 }}>Describe your typical listening patterns — the DJ reads this to plan sessions. You can also add a rest-audio note here, like <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>Rest audio: quote, podcast, music, white noise</code>. Saved to <code style={{ fontFamily:'var(--font-mono)', fontSize:'9px' }}>routines.md</code></div>
             <textarea className="settings-textarea" style={{ minHeight: 110 }}
               placeholder="e.g. I usually work 9–5 Mon–Fri. Mornings I want energy, afternoons focus music, evenings chill. Weekends are for exploring new artists."
               value={routinesDraft}
@@ -1695,6 +1736,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   const [djText, setDjText]             = useState('Waiting for DJ...');
   const [djAgent, setDjAgent]           = useState('');
   const [sessionCtx, setSessionCtx]     = useState('');
+  const [sessionMood, setSessionMood]   = useState(null); // { seed, lens, label }
   const [djBusy, setDjBusy]             = useState(false);
   const [queue, setQueue]               = useState([]);
   const [started, setStarted]           = useState(false);
@@ -1802,7 +1844,10 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   useEffect(() => {
     fetch('/api/settings/session/context')
       .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data?.context) setSessionCtx(data.context); })
+      .then(data => {
+        if (data?.context) setSessionCtx(data.context);
+        if (data?.mood) setSessionMood(data.mood);
+      })
       .catch(() => {});
   }, []);
 
@@ -1867,7 +1912,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
   };
 
   useEffect(() => {
-    const load = async () => {
+    const loadWeather = async () => {
       try {
         const s = await fetch('/api/settings').then(r => r.ok ? r.json() : null);
         const loc = s?.location;
@@ -1883,9 +1928,16 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
       } catch {}
     };
 
-    load();
-    const i = setInterval(load, 30 * 60 * 1000);
-    return () => clearInterval(i);
+    loadWeather();
+    const interval = setInterval(loadWeather, 30 * 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadWeather();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   // ── UPnP renderer status (poll every 30s + on settings close)
@@ -2060,10 +2112,10 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
     }
   }, [resting]);
 
-  // ── Pause music only when rest piece is Music category
+  // ── Pause music when rest piece is audio-based (music/podcast/white noise)
   useEffect(() => {
     if (!restPiece || restPiece._error || !resting) return;
-    if (restPiece.cat === 'Music' && !didPauseForBreakRef.current) {
+    if ((restPiece.cat === 'Music' || restPiece.audioUrl) && !didPauseForBreakRef.current) {
       const audio = audioRef.current;
       preBreakSrcRef.current  = audio.src ?? '';
       preBreakTimeRef.current = audio.currentTime ?? 0;
@@ -2526,7 +2578,11 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
 
     try {
       await fetch('/api/settings/queue/clear', { method: 'POST' });
-      await fetch('/api/settings/session/start', { method: 'POST' });
+      const sessionStartRes = await fetch('/api/settings/session/start', { method: 'POST' });
+      if (sessionStartRes.ok) {
+        const sessionStartData = await sessionStartRes.json().catch(() => null);
+        if (sessionStartData?.mood) setSessionMood(sessionStartData.mood);
+      }
       // Retry up to 3 times if the server is busy with another AI call
       for (let attempt = 0; attempt < 3; attempt++) {
         const chatRes = await fetch('/api/chat', {
@@ -2843,6 +2899,7 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
             <span>Good {now.getHours()<12?'morning':now.getHours()<18?'afternoon':'evening'}.</span>
             <span className="date">{restIntervalMin}m focus</span>
           </div>
+          {sessionMood?.label && <div className="clock-mood">{sessionMood.label}</div>}
         </div>
         <div className="session-swap">
           <div className="session-label">{size === 'mini' ? 'Next break in' : 'Current session · focus'}</div>

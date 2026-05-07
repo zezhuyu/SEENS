@@ -124,6 +124,18 @@ export function getRecentMessages(limit = 10) {
 
 const SESSION_MOODS  = ['nostalgic','energetic','dreamy','melancholic','uplifting','introspective','euphoric','raw'];
 const SESSION_LENSES = ['deep cut','B-side','underrated gem','recent release','live version era','debut album feel'];
+const MOOD_LABELS = {
+  nostalgic: 'nostalgic',
+  energetic: 'high energy',
+  dreamy: 'dreamy',
+  melancholic: 'melancholic',
+  uplifting: 'happy',
+  introspective: 'reflective',
+  euphoric: 'euphoric',
+  raw: 'raw',
+  calm: 'calm',
+  focused: 'focused',
+};
 
 // Mark the start of a new listening session (recorded as unix epoch in prefs)
 export function setSessionStart() {
@@ -140,6 +152,15 @@ export function getSessionMood() {
     seed: getPref('session.mood_seed') || SESSION_MOODS[new Date().getMinutes() % SESSION_MOODS.length],
     lens: getPref('session.mood_lens') || SESSION_LENSES[Math.floor(new Date().getSeconds() / 10) % SESSION_LENSES.length],
   };
+}
+
+export function getSessionMoodLabel() {
+  const energyPref = getPref('mood.energy', 'auto');
+  if (energyPref && energyPref !== 'auto') {
+    return MOOD_LABELS[energyPref] ?? energyPref;
+  }
+  const { seed } = getSessionMood();
+  return MOOD_LABELS[seed] ?? seed;
 }
 
 // DJ-extracted summary of what the user is doing / their mood for this session

@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getPref, setPref, clearQueue, setSessionStart, getSessionContext } from '../src/state.js';
+import { getPref, setPref, clearQueue, setSessionStart, getSessionContext, getSessionMood, getSessionMoodLabel } from '../src/state.js';
 import { AGENT_NAMES, getActiveAgentName, agentStatus, agentReset } from '../src/ai/index.js';
 import { isRerankerEnabled, enableReranker, disableReranker, isSubprocessRunning, getHealth as getRerankerHealth, seedPlaylist, seedLibrary } from '../src/reranker.js';
 import { reloadSchedule, regenerateSchedule } from '../src/scheduler.js';
@@ -58,6 +58,7 @@ const STORY_INTERESTS_PATH = userPath('story-interests.md');
 const ROUTINES_PATH        = userPath('routines.md');
 const MOOD_RULES_PATH      = userPath('mood-rules.md');
 const TASTE_PATH           = userPath('taste.md');
+const RERANKER_BINARY_PATH  = userPath('reranker', 'seens-reranker');
 
 const router = express.Router();
 
@@ -131,20 +132,71 @@ router.get('/reranker', async (req, res) => {
   const enabled    = isRerankerEnabled();
   const running    = isSubprocessRunning();
   const scriptPath = getPref('reranker.script', null);
+  const binaryPath = getPref('reranker.binary', '');
   const health     = enabled ? await getRerankerHealth() : null;
-  res.json({ enabled, running, reachable: !!health, health, scriptPath });
+  res.json({ enabled, running, reachable: !!health, health, scriptPath, binaryPath, binaryInstalled: !!binaryPath && fs.existsSync(binaryPath) });
 });
 
 // POST /api/settings/reranker — enable (spawns subprocess) or disable (kills it)
 router.post('/reranker', async (req, res) => {
-  const { enabled, scriptPath } = req.body;
+  const { enabled, scriptPath, binaryPath } = req.body;
+  const restartNeeded = isSubprocessRunning() && (scriptPath !== undefined || binaryPath !== undefined);
   if (scriptPath !== undefined) setPref('reranker.script', scriptPath || null);
+  if (binaryPath !== undefined) setPref('reranker.binary', binaryPath || null);
+  if (restartNeeded) {
+    await disableReranker();
+  }
   if (enabled) {
     enableReranker();
-  } else {
+  } else if (!restartNeeded) {
     await disableReranker();
   }
   res.json({ enabled: !!enabled, running: isSubprocessRunning() });
+});
+
+// PUT /api/settings/reranker/binary — upload a standalone reranker executable
+router.put('/reranker/binary', async (req, res) => {
+  try {
+    ensureUserDir();
+    fs.mkdirSync(path.dirname(RERANKER_BINARY_PATH), { recursive: true });
+    const tmpPath = `${RERANKER_BINARY_PATH}.upload-${Date.now()}`;
+    let bytes = 0;
+    const out = fs.createWriteStream(tmpPath, { mode: 0o755 });
+
+    req.on('data', chunk => { bytes += chunk.length; });
+    req.on('aborted', () => {
+      try { out.destroy(); } catch {}
+      try { fs.unlinkSync(tmpPath); } catch {}
+    });
+
+    out.on('error', err => {
+      try { fs.unlinkSync(tmpPath); } catch {}
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    });
+
+    out.on('finish', async () => {
+      try {
+        fs.chmodSync(tmpPath, 0o755);
+        fs.renameSync(tmpPath, RERANKER_BINARY_PATH);
+        setPref('reranker.binary', RERANKER_BINARY_PATH);
+
+        const shouldRestart = getPref('reranker.enabled', '0') === '1';
+        if (shouldRestart) {
+          await disableReranker();
+          enableReranker();
+        }
+
+        res.json({ ok: true, bytes, binaryPath: RERANKER_BINARY_PATH, restarted: shouldRestart });
+      } catch (err) {
+        try { fs.unlinkSync(tmpPath); } catch {}
+        if (!res.headersSent) res.status(500).json({ error: err.message });
+      }
+    });
+
+    req.pipe(out);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/settings/auth-status — which music services are connected
@@ -407,12 +459,24 @@ router.post('/queue/clear', (req, res) => {
 // POST /api/settings/session/start — mark session start so the DJ remembers all instructions from it
 router.post('/session/start', (req, res) => {
   setSessionStart();
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    mood: {
+      ...getSessionMood(),
+      label: getSessionMoodLabel(),
+    },
+  });
 });
 
 // GET /api/settings/session/context — current session context the DJ has captured
 router.get('/session/context', (req, res) => {
-  res.json({ context: getSessionContext() });
+  res.json({
+    context: getSessionContext(),
+    mood: {
+      ...getSessionMood(),
+      label: getSessionMoodLabel(),
+    },
+  });
 });
 
 export default router;

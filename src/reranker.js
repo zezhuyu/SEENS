@@ -2,16 +2,20 @@
  * Optional reranker bridge for seens-radio.
  *
  * When the reranker is enabled via the UI, this module spawns
- * subprocess_main.py from the seens-reranker repo and communicates
- * with it over JSON-RPC on stdin/stdout — no separate server needed.
+ * a standalone reranker binary (preferred) or falls back to the
+ * legacy subprocess_main.py path and communicates with it over JSON-RPC
+ * on stdin/stdout — no separate server needed.
  *
  * The HTTP API path (RERANKER_URL) is kept as a fallback for when the
  * standalone server is already running externally.
  *
- * Script path resolution order:
- *   1. RERANKER_SCRIPT env var
- *   2. reranker.script pref (set via settings UI)
- *   3. ../seens-reranker/subprocess_main.py  (sibling repo default)
+ * Launch target resolution order:
+ *   1. RERANKER_BINARY env var
+ *   2. reranker.binary pref (set via settings UI)
+ *   3. user data dir binary (USER/reranker/seens-reranker)
+ *   4. RERANKER_SCRIPT env var
+ *   5. reranker.script pref (legacy fallback)
+ *   6. ../seens-reranker/subprocess_main.py  (sibling repo fallback)
  */
 
 import { spawn }          from 'child_process';
@@ -20,11 +24,13 @@ import fs                 from 'fs';
 import path               from 'path';
 import { fileURLToPath }  from 'url';
 import { getPref, setPref } from './state.js';
+import { userPath } from './paths.js';
 import { getWeatherContext } from './weather.js';
 import { fetchLyricsBatch } from '../music/lyrics.js';
 
 const ROOT          = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const DEFAULT_SCRIPT = path.join(ROOT, 'seens-reranker', 'subprocess_main.py');
+const DEFAULT_BINARY = userPath('reranker', 'seens-reranker');
 
 // ─── Canonical song ID ────────────────────────────────────────────────────────
 // Must match Python's _canonical_key() in seens-reranker/reranker/sync.py:
@@ -51,7 +57,13 @@ let _warmupPromise = null;        // resolves true (ready) or false (failed) onc
 let _restartTimer  = null;        // debounce handle for auto-restart
 
 export function isRerankerInstalled() {
-  try { return fs.existsSync(_scriptPath()); } catch { return false; }
+  try { return !!_launchTarget(); } catch { return false; }
+}
+
+function _binaryPath() {
+  return process.env.RERANKER_BINARY
+      ?? getPref('reranker.binary', null)
+      ?? DEFAULT_BINARY;
 }
 
 function _scriptPath() {
@@ -60,23 +72,36 @@ function _scriptPath() {
       ?? DEFAULT_SCRIPT;
 }
 
-function _pythonBin(scriptPath) {
-  // Prefer the venv python sibling to the script's repo root.
-  // Checks both .venv (standard) and venv (legacy) directory names.
-  const repoRoot = path.dirname(scriptPath);
-  for (const venvDir of ['.venv', 'venv']) {
-    const candidate = path.join(repoRoot, venvDir, 'bin', 'python3');
-    if (fs.existsSync(candidate)) return candidate;
+function _launchTarget() {
+  const binary = _binaryPath();
+  if (binary && fs.existsSync(binary)) {
+    const stat = fs.statSync(binary);
+    if (stat.isFile()) {
+      return { kind: 'binary', command: binary, args: [], cwd: path.dirname(binary) };
+    }
   }
-  return process.env.RERANKER_PYTHON ?? 'python3';
+
+  const script = _scriptPath();
+  if (script && fs.existsSync(script)) {
+    const repoRoot = path.dirname(script);
+    let python = process.env.RERANKER_PYTHON ?? 'python3';
+    for (const venvDir of ['.venv', 'venv']) {
+      const candidate = path.join(repoRoot, venvDir, 'bin', 'python3');
+      if (fs.existsSync(candidate)) { python = candidate; break; }
+    }
+    return { kind: 'script', command: python, args: [script], cwd: repoRoot };
+  }
+
+  return null;
 }
 
 function _spawnSubprocess() {
   _warmupPromise = null;
-  const script = _scriptPath();
-  const python  = _pythonBin(script);
-  console.log(`[Reranker] spawning subprocess: ${python} ${script}`);
-  _proc = spawn(python, [script], {
+  const launch = _launchTarget();
+  if (!launch) throw new Error('No reranker binary or script available');
+  console.log(`[Reranker] spawning subprocess: ${launch.command} ${launch.args.join(' ')}`);
+  _proc = spawn(launch.command, launch.args, {
+    cwd: launch.cwd ?? process.cwd(),
     stdio: ['pipe', 'pipe', 'inherit'],
     env: { ...process.env },
   });
@@ -154,12 +179,6 @@ export function isSubprocessRunning() {
 export function enableReranker() {
   setPref('reranker.enabled', '1');
   if (!isSubprocessRunning()) {
-    const script = _scriptPath();
-    if (!fs.existsSync(script)) {
-      console.error(`[Reranker] script not found: ${script}`);
-      console.error('[Reranker] Set RERANKER_SCRIPT env var or reranker.script pref to the full path of subprocess_main.py');
-      return;
-    }
     try {
       _spawnSubprocess();
       _warmup();
