@@ -11,7 +11,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, shell, session, ipcMain } =
 const path  = require('path');
 const http  = require('http');
 const fs    = require('fs');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 
 // In a packaged Electron app stdout/stderr have no terminal — writes throw EPIPE.
@@ -114,9 +114,11 @@ let serverPort = null;
   ])].join(path.delimiter);
 }
 
-let tray       = null;
-let mainWindow = null;
-let trayStatus = { state: 'idle', title: 'Seens Radio', artist: '' };
+let tray          = null;
+let mainWindow    = null;
+let trayStatus    = { state: 'idle', title: 'Seens Radio', artist: '' };
+let trayIsPlaying = false;
+let trayQueue     = [];  // up to 5 upcoming tracks
 
 function normalizeTrayText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -260,6 +262,91 @@ function createErrorWindow(message) {
 }
 
 // ── Menu bar tray icon ────────────────────────────────────────────────────────
+function buildTrayMenu() {
+  const playLabel = trayIsPlaying ? '⏸  Pause' : '▶  Play';
+
+  const queueItems = trayQueue.length
+    ? [
+        { label: 'Up Next', enabled: false },
+        ...trayQueue.map((t, i) => ({
+          label: `  ${i + 1}. ${(t.title ?? 'Unknown').slice(0, 40)}${t.artist ? ` — ${t.artist.slice(0, 24)}` : ''}`,
+          click: async () => {
+            const port = serverPort || PORT;
+            try {
+              await new Promise((resolve, reject) => {
+                const body = JSON.stringify({ index: i + 1 });
+                const req = http.request(
+                  { host: '127.0.0.1', port, path: '/api/queue/skip-to', method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+                  res => { res.resume(); res.on('end', resolve); }
+                );
+                req.on('error', reject);
+                req.end(body);
+              });
+            } catch (e) { console.warn('[Tray] skip-to error:', e.message); }
+            if (isWindowAlive(mainWindow)) mainWindow.webContents.send('tray-skip-next');
+          },
+        })),
+        { type: 'separator' },
+      ]
+    : [];
+
+  return Menu.buildFromTemplate([
+    {
+      label: playLabel,
+      click: () => { if (isWindowAlive(mainWindow)) mainWindow.webContents.send('tray-toggle-play'); },
+    },
+    { type: 'separator' },
+    {
+      label: '✉  Send Message…',
+      click: () => {
+        execFile('osascript', [
+          '-e',
+          'text returned of (display dialog "Message your DJ:" default answer "" with title "SEENS Radio" buttons {"Cancel", "Send"} default button "Send")',
+        ], (err, stdout) => {
+          if (err || !stdout.trim()) return; // cancelled
+          const msg = stdout.trim();
+          const port = serverPort || PORT;
+          const body = JSON.stringify({ message: msg });
+          const req = http.request(
+            { host: '127.0.0.1', port, path: '/api/chat', method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+            res => { res.resume(); }
+          );
+          req.on('error', e => console.warn('[Tray] chat error:', e.message));
+          req.end(body);
+          // Show app so user sees the DJ response arrive via WebSocket
+          if (isWindowAlive(mainWindow)) { mainWindow.show(); mainWindow.focus(); }
+          else createWindow(serverPort);
+        });
+      },
+    },
+    { type: 'separator' },
+    ...queueItems,
+    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
+  ]);
+}
+
+function refreshTrayMenu() {
+  if (!tray) return;
+  const port = serverPort || PORT;
+  if (!port) return;
+  http.get(`http://127.0.0.1:${port}/api/now?full=1`, (res) => {
+    let raw = '';
+    res.setEncoding('utf8');
+    res.on('data', c => { raw += c; });
+    res.on('end', () => {
+      try {
+        const data = JSON.parse(raw);
+        // queue[0] is what's playing; we want [1..5] as "up next"
+        trayQueue = (data.queue ?? []).slice(1, 6);
+      } catch {}
+      tray.setContextMenu(buildTrayMenu());
+    });
+  }).on('error', () => {});
+}
+
+
 function createTray() {
   const icon = nativeImage.createFromDataURL(
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAApgAAAKYB3X3/OAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAADGSURBVEiJ7ZSxDcIwEEVfBCMwCiMwCiMwCiMwAiMQIoqUJkWkdEFFl9KFDgqkSBQp2YCOhoKChobfhYMiJXaIkCjJk07nu3f/7v8kgB07/oQxxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhj7tRcAQGfbUjl3RQAAAABJRU5ErkJggg=='
@@ -269,19 +356,10 @@ function createTray() {
   tray = new Tray(icon);
   tray.setToolTip('Seens Radio');
   updateTrayTitle();
+  tray.setContextMenu(buildTrayMenu());
 
-  const menu = Menu.buildFromTemplate([
-    { label: 'Show', click: () => { if (isWindowAlive(mainWindow)) mainWindow.show(); else createWindow(serverPort); } },
-    { label: 'Hide', click: () => { if (isWindowAlive(mainWindow)) mainWindow.hide(); } },
-    { type: 'separator' },
-    { label: 'Open DevTools', click: () => { if (isWindowAlive(mainWindow)) mainWindow.webContents.openDevTools({ mode: 'detach' }); } },
-    { type: 'separator' },
-    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
-  ]);
-  tray.setContextMenu(menu);
   tray.on('click', () => {
-    if (isWindowAlive(mainWindow) && mainWindow.isVisible()) mainWindow.hide();
-    else if (isWindowAlive(mainWindow)) mainWindow.show();
+    if (isWindowAlive(mainWindow)) { mainWindow.show(); mainWindow.focus(); }
     else createWindow(serverPort);
   });
 }
@@ -313,6 +391,12 @@ app.whenReady().then(async () => {
     updateTrayTitle();
   });
 
+  ipcMain.on('tray-play-state', (_event, playing) => {
+    trayIsPlaying = Boolean(playing);
+    if (tray) tray.setContextMenu(buildTrayMenu());
+  });
+
+
   if (USE_EPHEMERAL_SERVER_PORT) {
     process.env.PORT = '0';
     PORT = 0;
@@ -327,6 +411,9 @@ app.whenReady().then(async () => {
     serverPort = globalThis.SEENS_SERVER_PORT || parseInt(process.env.PORT || `${PORT}`, 10) || PORT;
     PORT = serverPort;
     console.log(`[Electron] Server ready on ${serverPort}`);
+    // Refresh tray queue display every 15 seconds
+    refreshTrayMenu();
+    setInterval(refreshTrayMenu, 15_000);
   } catch (error) {
     console.error('[Electron] Server never became ready:', error);
     createErrorWindow(error.message);

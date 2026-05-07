@@ -75,6 +75,12 @@ function handleWS(msg) {
 
 connectWS();
 
+// ─── Electron tray integration ─────────────────────────────────────────────────
+if (window.__electron__?.isElectron) {
+  window.__electron__.onTrayTogglePlay(() => player.togglePlay());
+  window.__electron__.onTraySkipNext(() => player.skipNext());
+}
+
 // ─── Start overlay — tap → DJ generates session plan → speaks → music plays ──
 document.getElementById('start-btn').addEventListener('click', async () => {
   const btn = document.getElementById('start-btn');

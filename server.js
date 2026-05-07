@@ -194,6 +194,17 @@ app.get('/api/ready', (req, res) => {
   res.json({ app: 'seens-radio', ready: true });
 });
 
+
+// Skip to a specific queue position (used by tray menu)
+app.post('/api/queue/skip-to', async (req, res) => {
+  const index = parseInt(req.body?.index ?? '0', 10);
+  if (index > 0) {
+    const { skipToIndex } = await import('./src/state.js');
+    skipToIndex(index);
+  }
+  res.json({ ok: true });
+});
+
 // SPA fallback
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

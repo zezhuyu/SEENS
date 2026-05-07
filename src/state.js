@@ -235,6 +235,15 @@ export function clearQueue() {
   db.prepare('DELETE FROM queue').run();
 }
 
+// Remove the first n items from the queue so the item at index n becomes next
+export function skipToIndex(n) {
+  if (n <= 0) return;
+  const rows = db.prepare('SELECT id FROM queue ORDER BY position ASC LIMIT ?').all(n);
+  if (!rows.length) return;
+  const placeholders = rows.map(() => '?').join(',');
+  db.prepare(`DELETE FROM queue WHERE id IN (${placeholders})`).run(rows.map(r => r.id));
+}
+
 // ─── Plays ────────────────────────────────────────────────────────────────────
 export function getRecentPlays(limit = 20) {
   return db.prepare('SELECT * FROM plays ORDER BY played_at DESC LIMIT ?').all(limit);

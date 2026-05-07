@@ -377,7 +377,9 @@ export class RadioPlayer {
     this.$('ico-pause').style.display = playing ? 'block' : 'none';
     if (playing) this.startProgressPoll();
     else         this.stopProgressPoll();
+    window.__electron__?.reportPlayState(playing);
   }
+
 
   startProgressPoll() {
     this.stopProgressPoll();
