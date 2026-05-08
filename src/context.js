@@ -85,9 +85,9 @@ export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode =
     : null;
   const activeSong = nowPlaying ?? queuedNow;
 
-  // Full ordered queue (up to 6 tracks) for the "Up Next" informational block
+  // Full ordered queue (up to 20 tracks) for the "Up Next" informational block
   // This is separate from the dedup block — it tells the AI what will play and in what order.
-  const upNextTracks = getQueueTracks().slice(0, 6);
+  const upNextTracks = getQueueTracks().slice(0, 20);
 
   const nowPlayingCtx = activeSong
     ? `NOW PLAYING (the song the user is currently hearing): "${activeSong.resolvedTitle ?? activeSong.title}" by ${activeSong.resolvedArtist ?? activeSong.artist ?? 'unknown'}`

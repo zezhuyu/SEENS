@@ -38,5 +38,4 @@ jobs:
         run: |
           gh release create latest dist/*.dmg \
             --title "Latest build ($(date -u '+%Y-%m-%d %H:%M UTC'))" \
-            --notes "Built from commit ${{ github.sha }}." \
-            --prerelease
+            --notes "Built from commit ${{ github.sha }}."

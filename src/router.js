@@ -100,13 +100,35 @@ export async function handleInput(input, triggerType = 'user-chat') {
   const agentActive = isAgentActive();
   if (!agentActive) addMessage('user', trimmed);
 
+  // Resolve the active song early so similarity requests can inject the track name
+  // into the AI prompt — otherwise "this one" is ambiguous when the chat history
+  // contains a different artist request immediately before.
+  const _earlyPlays  = getRecentPlays(1);
+  const _earlyQueued = peekNext();
+  const _earlyRaw    = _earlyPlays[0] ?? (_earlyQueued[0] ?? null);
+  const earlyActiveSong = _earlyRaw ? {
+    title:  _earlyRaw.resolvedTitle  ?? _earlyRaw.resolved_title  ?? _earlyRaw.title  ?? '',
+    artist: _earlyRaw.resolvedArtist ?? _earlyRaw.resolved_artist ?? _earlyRaw.artist ?? '',
+  } : null;
+
+  const SIMILAR_RE = /\b(similar|like this|same vibe|more like|sounds like|songs like|something like|in the style of|inspired by|vibes? like|remind me of)\b/i;
+  const isSimilarEarly = triggerType === 'user-chat' && SIMILAR_RE.test(trimmed);
+
+  // Build the effective prompt — for similarity requests, append the currently
+  // playing track so the AI cannot misinterpret "this one" from chat history.
+  let effectiveInput = trimmed;
+  if (isSimilarEarly && earlyActiveSong?.title) {
+    effectiveInput = `${trimmed} [currently playing: "${earlyActiveSong.title}"${earlyActiveSong.artist ? ` by ${earlyActiveSong.artist}` : ''}]`;
+    console.log(`[Router:${triggerType}] similar-request — injecting active song into prompt: "${earlyActiveSong.title}"`);
+  }
+
   const systemPrompt = await buildSystemPrompt(triggerType, { agentMode: agentActive });
   const agentName = getActiveAgentName();
   console.log(`[Router:${triggerType}] start → AI call (${agentName})`);
 
   let djResponse;
   try {
-    djResponse = await generate(systemPrompt, trimmed);
+    djResponse = await generate(systemPrompt, effectiveInput);
     console.log(`[Router:${triggerType}] ${ts()} AI pass-1 done`);
     console.log(`[Router:${triggerType}]   tracks=${djResponse.play?.length ?? 0}  say="${djResponse.say?.slice(0, 100)}"`);
     console.log(`[Router:${triggerType}]   pluginCall=${JSON.stringify(djResponse.pluginCall ?? null)}`);
@@ -337,10 +359,13 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // when the last current song is nearly done. Generating it here would race and steal the intro.
   const shouldSynthesize = !!djResponse.say && (hasTracks || chatSpeakOn) && !isAutoRefill;
 
-  // Current playing song — used for similar-song intent
-  const _plays = getRecentPlays(1);
-  const _queued = peekNext();
-  const activeSong = _plays[0] ?? (_queued[0] ? { title: _queued[0].title, artist: _queued[0].artist } : null);
+  // Active song resolved early (before generate()) — reuse here with full camelCase shape.
+  const activeSong = earlyActiveSong ? {
+    title:          earlyActiveSong.title,
+    artist:         earlyActiveSong.artist,
+    resolvedTitle:  earlyActiveSong.title,
+    resolvedArtist: earlyActiveSong.artist,
+  } : null;
 
   // ── Expand candidate pool for reranker ────────────────────────────────────────
   // Merge play + candidates (DJ nominates extra songs without speaking about them).
@@ -387,23 +412,32 @@ export async function handleInput(input, triggerType = 'user-chat') {
   }
 
   // ── "Similar to current song" intent ─────────────────────────────────────────
-  // When the user asks for music similar to what's playing, supplement the pool
-  // with DB results from findSimilar() so the reranker has acoustically close songs.
-  const isSimilarRequest = triggerType === 'user-chat' &&
-    /\b(similar|like this|same vibe|more like|sounds like|songs like|something like)\b/i.test(trimmed);
-  if (isSimilarRequest && isRerankerEnabled() && activeSong) {
-    console.log(`[Router:${triggerType}] ${ts()} similar-song intent detected — querying DB for "${activeSong.title ?? activeSong.resolvedTitle}"`);
-    const simResults = await findSimilar(
-      { title: activeSong.resolvedTitle ?? activeSong.title, artist: activeSong.resolvedArtist ?? activeSong.artist },
-      20,
-    ).catch(() => null);
-    if (simResults?.length) {
-      const simSeen = new Set(rerankerPool.map(t => `${t.title}___${t.artist ?? ''}`));
-      const simFresh = simResults
-        .filter(r => !simSeen.has(`${r.title}___${r.artist ?? ''}`))
-        .map(r => ({ title: r.title, artist: r.artist, source: r.source ?? 'any' }));
-      rerankerPool = [...rerankerPool, ...simFresh];
-      console.log(`[Router:${triggerType}] ${ts()} similar-song: added ${simFresh.length} DB candidates (pool now ${rerankerPool.length})`);
+  // When the user asks for something similar, query the DB for acoustically close
+  // songs and add them directly to djResponse.play (AI pick first, then similar).
+  // The taste reranker is NOT used — it would promote frequently-played songs
+  // instead of acoustically similar ones, which is the wrong thing here.
+  const isSimilarRequest = isSimilarEarly; // detected early to inject active song into AI prompt
+  if (isSimilarRequest) {
+    if (!activeSong) {
+      console.log(`[Router:${triggerType}] ${ts()} similar-song intent — no active song to base similarity on; using AI picks only`);
+    } else if (!isRerankerEnabled()) {
+      console.log(`[Router:${triggerType}] ${ts()} similar-song intent — reranker disabled; using AI picks only`);
+    } else {
+      console.log(`[Router:${triggerType}] ${ts()} similar-song intent — enriching playlist from DB for "${activeSong.resolvedTitle}"`);
+      const simResults = await findSimilar(
+        { title: activeSong.resolvedTitle, artist: activeSong.resolvedArtist },
+        20,
+      ).catch(() => null);
+      if (simResults?.length) {
+        const aiKeys  = new Set((djResponse.play ?? []).map(t => `${t.title}___${t.artist ?? ''}`));
+        const simFresh = simResults
+          .filter(r => !aiKeys.has(`${r.title}___${r.artist ?? ''}`))
+          .map(r => ({ title: r.title, artist: r.artist, source: r.source ?? 'any' }));
+        djResponse = { ...djResponse, play: [...(djResponse.play ?? []), ...simFresh] };
+        console.log(`[Router:${triggerType}] ${ts()} similar-song: added ${simFresh.length} DB similar songs (playlist now ${djResponse.play.length})`);
+      } else {
+        console.log(`[Router:${triggerType}] ${ts()} similar-song: findSimilar returned no results for "${activeSong.resolvedTitle}" — using AI picks only`);
+      }
     }
   }
 
@@ -420,11 +454,17 @@ export async function handleInput(input, triggerType = 'user-chat') {
     });
   }
 
+  // Decide whether the taste reranker should run.
+  //   • Background auto-fill / DJ recommendation → always rerank (improves variety)
+  //   • user-chat (any kind) → skip taste reranker; the DJ's picks and the
+  //     findSimilar enrichment above already serve the user's explicit intent.
+  const shouldRerank = hasMusicCandidates && isRerankerEnabled() && triggerType !== 'user-chat';
+
   // Reranker is optional. Give it a short foreground budget; if it is cold,
   // unavailable, crashed, or slow, keep the DJ-generated playlist/intro instead
   // of holding playback for the full model/RPC timeout.
   const RERANK_SOFT_TIMEOUT_MS = 20_000;
-  const optionalRerank = (hasMusicCandidates && isRerankerEnabled())
+  const optionalRerank = shouldRerank
     ? new Promise(resolve => {
         let settled = false;
         const timer = setTimeout(() => {
@@ -739,6 +779,16 @@ export async function handleInput(input, triggerType = 'user-chat') {
   djResponse = { ...djResponse, say: finalSay };
 
   if (!agentActive) addMessage('assistant', finalSay);
+
+  // Record the full queued playlist as a supplementary assistant message so the DJ
+  // can answer follow-up questions like "what did you queue?" or "what's next?".
+  if (!agentActive && resolvedTracks.length > 0 && triggerType === 'user-chat') {
+    const playlistLines = resolvedTracks.slice(0, 20)
+      .map((t, i) => `${i + 1}. "${t.resolvedTitle ?? t.title}"${t.resolvedArtist ?? t.artist ? ` by ${t.resolvedArtist ?? t.artist}` : ''}`)
+      .join('\n');
+    addMessage('assistant', `[Queued playlist:\n${playlistLines}]`);
+  }
+
   console.log(`[Router:${triggerType}] ${ts()} broadcasting — firstTrack="${firstTrack?.resolvedTitle ?? firstTrack?.title ?? 'none'}" videoId=${firstTrack?.videoId ?? 'null'}`);
 
   broadcast('dj-response', {
