@@ -115,6 +115,7 @@ let serverPort = null;
 }
 
 let tray          = null;
+let trayPopup     = null;
 let mainWindow    = null;
 let trayStatus    = { state: 'idle', title: 'Seens Radio', artist: '' };
 let trayIsPlaying = false;
@@ -261,70 +262,50 @@ function createErrorWindow(message) {
   mainWindow.show();
 }
 
-// ── Menu bar tray icon ────────────────────────────────────────────────────────
-function buildTrayMenu() {
-  const playLabel = trayIsPlaying ? '⏸  Pause' : '▶  Play';
-
-  const queueItems = trayQueue.length
-    ? [
-        { label: 'Up Next', enabled: false },
-        ...trayQueue.map((t, i) => ({
-          label: `  ${i + 1}. ${(t.title ?? 'Unknown').slice(0, 40)}${t.artist ? ` — ${t.artist.slice(0, 24)}` : ''}`,
-          click: async () => {
-            const port = serverPort || PORT;
-            try {
-              await new Promise((resolve, reject) => {
-                const body = JSON.stringify({ index: i + 1 });
-                const req = http.request(
-                  { host: '127.0.0.1', port, path: '/api/queue/skip-to', method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
-                  res => { res.resume(); res.on('end', resolve); }
-                );
-                req.on('error', reject);
-                req.end(body);
-              });
-            } catch (e) { console.warn('[Tray] skip-to error:', e.message); }
-            if (isWindowAlive(mainWindow)) mainWindow.webContents.send('tray-skip-next');
-          },
-        })),
-        { type: 'separator' },
-      ]
-    : [];
-
-  return Menu.buildFromTemplate([
-    {
-      label: playLabel,
-      click: () => { if (isWindowAlive(mainWindow)) mainWindow.webContents.send('tray-toggle-play'); },
+// ── Tray popup window ─────────────────────────────────────────────────────────
+function createTrayPopup() {
+  if (trayPopup && !trayPopup.isDestroyed()) return;
+  trayPopup = new BrowserWindow({
+    width: 340,
+    height: 420,
+    show: false,
+    frame: false,
+    resizable: false,
+    transparent: false,
+    hasShadow: true,
+    skipTaskbar: true,
+    roundedCorners: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'tray-popup-preload.cjs'),
     },
-    { type: 'separator' },
-    {
-      label: '✉  Send Message…',
-      click: () => {
-        execFile('osascript', [
-          '-e',
-          'text returned of (display dialog "Message your DJ:" default answer "" with title "SEENS Radio" buttons {"Cancel", "Send"} default button "Send")',
-        ], (err, stdout) => {
-          if (err || !stdout.trim()) return; // cancelled
-          const msg = stdout.trim();
-          const port = serverPort || PORT;
-          const body = JSON.stringify({ message: msg });
-          const req = http.request(
-            { host: '127.0.0.1', port, path: '/api/chat', method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
-            res => { res.resume(); }
-          );
-          req.on('error', e => console.warn('[Tray] chat error:', e.message));
-          req.end(body);
-          // Show app so user sees the DJ response arrive via WebSocket
-          if (isWindowAlive(mainWindow)) { mainWindow.show(); mainWindow.focus(); }
-          else createWindow(serverPort);
-        });
-      },
-    },
-    { type: 'separator' },
-    ...queueItems,
-    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
-  ]);
+  });
+  trayPopup.loadFile(path.join(__dirname, 'tray-popup.html'));
+  trayPopup.on('blur', () => { if (trayPopup && !trayPopup.isDestroyed()) trayPopup.hide(); });
+  trayPopup.on('closed', () => { trayPopup = null; });
+}
+
+function showTrayPopup(trayBounds) {
+  if (!trayPopup || trayPopup.isDestroyed()) createTrayPopup();
+
+  if (trayPopup.isVisible()) { trayPopup.hide(); return; }
+
+  // Position below the tray icon, horizontally centred on it
+  const { width: pw } = trayPopup.getBounds();
+  const x = Math.round(trayBounds.x + trayBounds.width / 2 - pw / 2);
+  const y = Math.round(trayBounds.y + trayBounds.height + 4);
+  trayPopup.setPosition(x, y);
+  trayPopup.show();
+  trayPopup.focus();
+
+  const push = () => {
+    if (!trayPopup || trayPopup.isDestroyed()) return;
+    trayPopup.webContents.send('queue-update', trayQueue);
+    trayPopup.webContents.send('popup-play-state', trayIsPlaying);
+  };
+  if (trayPopup.webContents.isLoading()) trayPopup.webContents.once('did-finish-load', push);
+  else push();
 }
 
 function refreshTrayMenu() {
@@ -338,30 +319,46 @@ function refreshTrayMenu() {
     res.on('end', () => {
       try {
         const data = JSON.parse(raw);
-        // /api/now?full=1 returns the upcoming queue only, so keep the first
-        // item — it is the next song to play — and cap the tray list at 5.
         trayQueue = (data.queue ?? []).slice(0, 5);
       } catch {}
-      tray.setContextMenu(buildTrayMenu());
+      // Push live queue to popup if it is open
+      if (trayPopup && !trayPopup.isDestroyed() && trayPopup.isVisible()) {
+        trayPopup.webContents.send('queue-update', trayQueue);
+      }
     });
   }).on('error', () => {});
 }
-
 
 function createTray() {
   const icon = nativeImage.createFromDataURL(
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAApgAAAKYB3X3/OAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAADGSURBVEiJ7ZSxDcIwEEVfBCMwCiMwCiMwCiMwAiMQIoqUJkWkdEFFl9KFDgqkSBQp2YCOhoKChobfhYMiJXaIkCjJk07nu3f/7v8kgB07/oQxxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhjLBYCU0imlnHPuVlU5pZQzxhj7tRcAQGfbUjl3RQAAAABJRU5ErkJggg=='
   );
   icon.setTemplateImage(true);
-
   tray = new Tray(icon);
   tray.setToolTip('Seens Radio');
   updateTrayTitle();
-  tray.setContextMenu(buildTrayMenu());
 
-  tray.on('click', () => {
-    if (isWindowAlive(mainWindow)) { mainWindow.show(); mainWindow.focus(); }
-    else createWindow(serverPort);
+  // Left-click → toggle popup
+  tray.on('click', (_event, bounds) => showTrayPopup(bounds));
+
+  // Right-click → minimal context menu
+  tray.on('right-click', () => {
+    tray.popUpContextMenu(Menu.buildFromTemplate([
+      {
+        label: trayIsPlaying ? '⏸  Pause' : '▶  Play',
+        click: () => { if (isWindowAlive(mainWindow)) mainWindow.webContents.send('tray-toggle-play'); },
+      },
+      { type: 'separator' },
+      {
+        label: 'Open Seens Radio',
+        click: () => {
+          if (isWindowAlive(mainWindow)) { mainWindow.show(); mainWindow.focus(); }
+          else createWindow(serverPort);
+        },
+      },
+      { type: 'separator' },
+      { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
+    ]));
   });
 }
 
@@ -394,7 +391,46 @@ app.whenReady().then(async () => {
 
   ipcMain.on('tray-play-state', (_event, playing) => {
     trayIsPlaying = Boolean(playing);
-    if (tray) tray.setContextMenu(buildTrayMenu());
+    if (trayPopup && !trayPopup.isDestroyed() && trayPopup.isVisible()) {
+      trayPopup.webContents.send('popup-play-state', trayIsPlaying);
+    }
+  });
+
+  // ── Popup IPC ──────────────────────────────────────────────────────────────
+  ipcMain.handle('tray-popup-chat', async (_event, msg) => {
+    const port = serverPort || PORT;
+    const body = JSON.stringify({ message: msg });
+    await new Promise((resolve, reject) => {
+      const req = http.request(
+        { host: '127.0.0.1', port, path: '/api/chat', method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+        res => { res.resume(); res.on('end', resolve); }
+      );
+      req.on('error', reject);
+      req.end(body);
+    });
+    // Surface the main window so the user sees the DJ response
+    if (isWindowAlive(mainWindow)) { mainWindow.show(); mainWindow.focus(); }
+    else createWindow(serverPort);
+  });
+
+  ipcMain.handle('tray-popup-play', async (_event, index) => {
+    const port = serverPort || PORT;
+    const body = JSON.stringify({ index });
+    await new Promise((resolve, reject) => {
+      const req = http.request(
+        { host: '127.0.0.1', port, path: '/api/queue/skip-to', method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+        res => { res.resume(); res.on('end', resolve); }
+      );
+      req.on('error', reject);
+      req.end(body);
+    });
+    if (isWindowAlive(mainWindow)) mainWindow.webContents.send('tray-skip-next');
+  });
+
+  ipcMain.on('tray-popup-toggle-play', () => {
+    if (isWindowAlive(mainWindow)) mainWindow.webContents.send('tray-toggle-play');
   });
 
 

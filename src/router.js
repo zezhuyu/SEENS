@@ -407,6 +407,19 @@ export async function handleInput(input, triggerType = 'user-chat') {
     }
   }
 
+  // Deduplicate pool by (title, artist) before sending — multiple DB supplement
+  // passes can add the same song more than once, causing the reranker to rank
+  // duplicates highly and flood the final playlist with the same track.
+  {
+    const seenPool = new Set();
+    rerankerPool = rerankerPool.filter(t => {
+      const k = `${t.title ?? ''}___${t.artist ?? ''}`;
+      if (seenPool.has(k)) return false;
+      seenPool.add(k);
+      return true;
+    });
+  }
+
   // Reranker is optional. Give it a short foreground budget; if it is cold,
   // unavailable, crashed, or slow, keep the DJ-generated playlist/intro instead
   // of holding playback for the full model/RPC timeout.
@@ -545,8 +558,16 @@ export async function handleInput(input, triggerType = 'user-chat') {
       }
     }
 
-    // Rebuild final play list directly from reranker order.
-    finalDjResponse = { ...finalDjResponse, play: qualifiedFill.slice(0, playLen) };
+    // Rebuild final play list directly from reranker order, deduped by (title, artist)
+    // so a song that appears multiple times in the ranked output only plays once.
+    const seenFinal = new Set();
+    const dedupedFill = qualifiedFill.filter(t => {
+      const k = `${t.title ?? ''}___${t.artist ?? ''}`;
+      if (seenFinal.has(k)) return false;
+      seenFinal.add(k);
+      return true;
+    });
+    finalDjResponse = { ...finalDjResponse, play: dedupedFill.slice(0, playLen) };
     finalRanked = ranked;
 
   } else if (rerankResult.status === 'rejected') {

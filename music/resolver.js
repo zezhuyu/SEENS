@@ -6,8 +6,13 @@
  *   2. yt-search (no API key) → YouTube videoId for IFrame playback
  */
 
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getAccessToken } from '../auth/spotify-auth.js';
 import ytSearch from 'yt-search';
+
+const execFileAsync = promisify(execFile);
+const YTDLP = process.env.YTDLP_BIN ?? '/opt/homebrew/bin/yt-dlp';
 
 const SPOTIFY_BASE = 'https://api.spotify.com/v1';
 
@@ -36,7 +41,8 @@ async function resolveOne(track) {
   try {
     meta = await resolveSpotifyMeta(track);
   } catch (e) {
-    console.warn(`[Resolver] Spotify: "${track.title}" — ${e.message}`);
+    const detail = e.cause?.code ?? e.message;
+    console.warn(`[Resolver] Spotify: "${track.title}" — ${detail}`);
   }
 
   // Step 2: YouTube videoId via yt-search (no API key, no quota)
@@ -47,10 +53,26 @@ async function resolveOne(track) {
     if (videoId) {
       meta.videoId   = videoId;
       meta.streamUrl = `/api/stream/${videoId}`;
-      console.log(`[Resolver] ✓ "${title}" → yt:${videoId} → ${meta.streamUrl}`);
+      console.log(`[Resolver] ✓ "${title}" → yt:${videoId}`);
     }
   } catch (e) {
-    console.warn(`[Resolver] YouTube: "${track.title}" — ${e.message}`);
+    console.warn(`[Resolver] yt-search: "${track.title}" — ${e.message}`);
+  }
+
+  // Step 3: yt-dlp fallback when yt-search finds nothing
+  if (!meta.videoId) {
+    try {
+      const title  = meta.resolvedTitle  ?? track.title;
+      const artist = meta.resolvedArtist ?? track.artist;
+      const videoId = await searchYtDlp(title, artist);
+      if (videoId) {
+        meta.videoId   = videoId;
+        meta.streamUrl = `/api/stream/${videoId}`;
+        console.log(`[Resolver] ✓ "${title}" → yt-dlp:${videoId}`);
+      }
+    } catch (e) {
+      console.warn(`[Resolver] yt-dlp: "${track.title}" — ${e.message}`);
+    }
   }
 
   return meta;
@@ -138,7 +160,9 @@ async function searchYouTube(title, artist) {
         }
       }
       if (bestScore === 2) break;
-    } catch { /* try next query */ }
+    } catch (err) {
+      console.warn(`[Resolver] yt-search query failed ("${q}"):`, err.message);
+    }
   }
 
   // Reject title-only matches (score=0) — common words appear in thousands of videos.
@@ -160,4 +184,16 @@ async function searchYouTube(title, artist) {
     console.warn(`[Resolver] yt no confident match for "${artist} — ${title}"`);
   }
   return bestVideoId;
+}
+
+async function searchYtDlp(title, artist) {
+  const q = `${artist} - ${title}`;
+  const { stdout } = await execFileAsync(YTDLP, [
+    `ytsearch3:${q}`,
+    '--print', '%(id)s',
+    '--no-playlist', '--quiet', '--no-warnings',
+  ], { timeout: 20_000 });
+  const ids = stdout.trim().split('\n').filter(Boolean);
+  if (ids[0]) console.log(`[Resolver] yt-dlp search "${q}" → ${ids[0]}`);
+  return ids[0] ?? null;
 }

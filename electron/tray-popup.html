@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  background: #141414;
+  color: #e2e2e2;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  border-radius: 12px;
+}
+
+/* draggable top strip */
+.drag { -webkit-app-region: drag; height: 10px; flex-shrink: 0; }
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 14px 10px;
+  flex-shrink: 0;
+}
+
+.app-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.01em;
+}
+
+.play-btn {
+  -webkit-app-region: no-drag;
+  background: #252525;
+  border: none;
+  color: #e2e2e2;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s;
+  flex-shrink: 0;
+}
+.play-btn:hover { background: #303030; }
+.play-btn:active { transform: scale(0.94); }
+
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  color: #555;
+  text-transform: uppercase;
+  padding: 0 14px 5px;
+  flex-shrink: 0;
+}
+
+.queue-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 6px;
+}
+.queue-list::-webkit-scrollbar { width: 3px; }
+.queue-list::-webkit-scrollbar-track { background: transparent; }
+.queue-list::-webkit-scrollbar-thumb { background: #2e2e2e; border-radius: 2px; }
+
+.track-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  cursor: pointer;
+  border-radius: 7px;
+  transition: background 0.1s;
+}
+.track-item:hover { background: #1f1f1f; }
+.track-item:active { background: #252525; }
+
+.track-num {
+  font-size: 11px;
+  color: #484848;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.track-item:hover .track-num { display: none; }
+.play-hint {
+  display: none;
+  font-size: 10px;
+  color: #888;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.track-item:hover .play-hint { display: block; }
+
+.track-info { flex: 1; min-width: 0; }
+.track-title {
+  font-size: 13px;
+  color: #e2e2e2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+.track-artist {
+  font-size: 11px;
+  color: #585858;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+.empty-queue {
+  padding: 14px 8px;
+  font-size: 12px;
+  color: #484848;
+  font-style: italic;
+}
+
+.sep { height: 1px; background: #1e1e1e; margin: 6px 14px; flex-shrink: 0; }
+
+.chat-area {
+  flex-shrink: 0;
+  padding: 6px 10px 12px;
+}
+
+.chat-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #1c1c1c;
+  border: 1px solid #272727;
+  border-radius: 10px;
+  padding: 5px 6px 5px 12px;
+  transition: border-color 0.15s;
+}
+.chat-row:focus-within { border-color: #3a3a3a; }
+
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e2e2e2;
+  font-size: 13px;
+  font-family: inherit;
+  min-width: 0;
+  -webkit-user-select: text;
+  user-select: text;
+  line-height: 1.4;
+}
+.chat-input::placeholder { color: #3d3d3d; }
+
+.send-btn {
+  -webkit-app-region: no-drag;
+  background: #2563eb;
+  border: none;
+  color: #fff;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.12s, opacity 0.12s, transform 0.1s;
+  line-height: 1;
+}
+.send-btn:hover:not(:disabled) { background: #3b7aff; }
+.send-btn:active:not(:disabled) { transform: scale(0.92); }
+.send-btn:disabled { opacity: 0.25; cursor: default; }
+
+.status {
+  font-size: 10px;
+  color: #484848;
+  padding: 0 14px 4px;
+  min-height: 16px;
+  flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+<div class="drag"></div>
+
+<div class="header">
+  <span class="app-name">Seens Radio</span>
+  <button class="play-btn" id="playBtn">▶</button>
+</div>
+
+<div class="section-label">Up Next</div>
+<div class="queue-list" id="queueList">
+  <div class="empty-queue">No upcoming tracks</div>
+</div>
+
+<div class="sep"></div>
+<div class="status" id="status"></div>
+<div class="chat-area">
+  <div class="chat-row">
+    <input class="chat-input" id="chatInput" type="text"
+           placeholder="Message your DJ…" autocomplete="off" spellcheck="false">
+    <button class="send-btn" id="sendBtn" disabled>↑</button>
+  </div>
+</div>
+
+<script>
+const queueList = document.getElementById('queueList');
+const chatInput = document.getElementById('chatInput');
+const sendBtn   = document.getElementById('sendBtn');
+const playBtn   = document.getElementById('playBtn');
+const status    = document.getElementById('status');
+
+// ── Queue ────────────────────────────────────────────────────────────────────
+function renderQueue(q) {
+  if (!q || !q.length) {
+    queueList.innerHTML = '<div class="empty-queue">No upcoming tracks</div>';
+    return;
+  }
+  queueList.innerHTML = q.map((t, i) => {
+    const title  = esc(t.resolved_title  || t.title  || 'Unknown');
+    const artist = esc(t.resolved_artist || t.artist || '');
+    return `
+      <div class="track-item" data-index="${i + 1}">
+        <span class="track-num">${i + 1}</span>
+        <span class="play-hint">▶</span>
+        <div class="track-info">
+          <div class="track-title">${title}</div>
+          ${artist ? `<div class="track-artist">${artist}</div>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+
+  queueList.querySelectorAll('.track-item').forEach(el => {
+    el.addEventListener('click', async () => {
+      const idx = parseInt(el.dataset.index, 10);
+      el.style.opacity = '0.4';
+      try { await window.__tray__.playTrack(idx); } catch {}
+      setTimeout(() => { el.style.opacity = ''; }, 600);
+    });
+  });
+}
+
+window.__tray__.onQueueUpdate(q => renderQueue(q));
+
+// ── Play / Pause ─────────────────────────────────────────────────────────────
+window.__tray__.onPlayState(playing => {
+  playBtn.textContent = playing ? '⏸' : '▶';
+  playBtn.title = playing ? 'Pause' : 'Play';
+});
+
+playBtn.addEventListener('click', () => window.__tray__.togglePlay());
+
+// ── Chat ─────────────────────────────────────────────────────────────────────
+chatInput.addEventListener('input', () => {
+  sendBtn.disabled = chatInput.value.trim().length === 0;
+});
+
+async function send() {
+  const msg = chatInput.value.trim();
+  if (!msg) return;
+  chatInput.value = '';
+  sendBtn.disabled = true;
+  status.textContent = 'Sending…';
+  try {
+    await window.__tray__.sendChat(msg);
+    status.textContent = 'Sent ✓';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+  } catch {
+    status.textContent = 'Failed to send';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  }
+}
+
+sendBtn.addEventListener('click', send);
+chatInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+// Focus input when window is shown
+window.addEventListener('focus', () => chatInput.focus());
+chatInput.focus();
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+</script>
+</body>
+</html>
