@@ -22,33 +22,36 @@ const execFileAsync = promisify(execFile);
 const YTDLP = process.env.YTDLP_BIN ?? '/opt/homebrew/bin/yt-dlp';
 
 // Cache resolved URLs for 4 hours (they expire in ~6h)
-const urlCache   = new Map(); // videoId → { url, expires }
+const urlCache   = new Map(); // videoId → { url, duration, expires }
 const inFlight   = new Map(); // videoId → Promise (dedup concurrent requests)
 const CACHE_TTL  = 4 * 60 * 60 * 1000;
 
-async function getAudioUrl(videoId) {
+async function getAudioInfo(videoId) {
   const cached = urlCache.get(videoId);
   if (cached && Date.now() < cached.expires) {
     console.log(`[Stream] Cache hit: ${videoId}`);
-    return cached.url;
+    return cached;
   }
-  // Dedup: if a resolve is already in flight for this videoId, wait for it
   if (inFlight.has(videoId)) {
     console.log(`[Stream] Waiting for in-flight resolve: ${videoId}`);
     return inFlight.get(videoId);
   }
-
   console.log(`[Stream] yt-dlp resolving: ${videoId}`);
   const promise = _resolve(videoId);
   inFlight.set(videoId, promise);
   try { return await promise; } finally { inFlight.delete(videoId); }
 }
 
+async function getAudioUrl(videoId) {
+  return (await getAudioInfo(videoId)).url;
+}
+
 async function _resolve(videoId) {
   const browser = process.env.YTDLP_COOKIES_BROWSER ?? 'chrome';
   const baseArgs = [
     '-f', 'bestaudio[ext=m4a]/bestaudio',
-    '--get-url',
+    '--print', 'url',
+    '--print', 'duration',
     '--no-playlist',
     `https://www.youtube.com/watch?v=${videoId}`,
   ];
@@ -68,11 +71,14 @@ async function _resolve(videoId) {
   for (const [label, args] of attempts) {
     try {
       const { stdout } = await execFileAsync(YTDLP, args, { ...opts, encoding: 'utf8' });
-      const url = stdout.trim().split('\n')[0];
+      const lines = stdout.trim().split('\n');
+      const url = lines[0];
       if (!url) throw new Error('yt-dlp returned no URL');
-      urlCache.set(videoId, { url, expires: Date.now() + CACHE_TTL });
-      console.log(`[Stream] Resolved ${videoId} (${label}) → ${url.slice(0, 80)}...`);
-      return url;
+      const duration = parseFloat(lines[1]) || null;
+      const entry = { url, duration, expires: Date.now() + CACHE_TTL };
+      urlCache.set(videoId, entry);
+      console.log(`[Stream] Resolved ${videoId} (${label}) duration=${duration}s → ${url.slice(0, 80)}...`);
+      return entry;
     } catch (err) {
       const stderrLast = err.stderr?.trim().split('\n').pop();
       const detail = (stderrLast || err.message) || String(err);
@@ -201,6 +207,20 @@ router.get('/:videoId', async (req, res) => {
   // no-store so Safari re-hits this endpoint on reconnect (fresh CDN URL each time)
   res.setHeader('Cache-Control', 'no-store');
   res.redirect(302, audioUrl);
+});
+
+// GET /api/stream/:videoId/info — return duration (seconds) as reported by yt-dlp
+router.get('/:videoId/info', async (req, res) => {
+  const { videoId } = req.params;
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    return res.status(400).json({ error: 'Invalid videoId' });
+  }
+  try {
+    const { duration } = await getAudioInfo(videoId);
+    res.json({ videoId, duration });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
 });
 
 // GET /api/stream/:videoId/url — just return the URL (for debug)
