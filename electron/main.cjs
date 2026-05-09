@@ -87,31 +87,47 @@ if (_dotenvResult.error) {
   console.log('[Electron] .env loaded — PORT:', process.env.PORT, '| OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓ set' : '✗ MISSING', '| AI_AGENT:', process.env.AI_AGENT);
 }
 
-let PORT = parseInt(process.env.PORT || '8080', 10);
+let PORT = parseInt(process.env.PORT || '7477', 10);
 let serverPort = null;
 
-// Finder-launched apps do not inherit the user's shell PATH. Keep the original
-// Homebrew fallback, but also merge login-shell PATH and optional .env entries.
+// Finder-launched apps do not inherit the user's shell PATH or exports.
+// Run a login shell to capture the full environment (PATH, HOST, PORT, etc.)
+// then merge it in. .env values written above take precedence over shell exports.
 {
   const splitPath = (value) => String(value || '').split(path.delimiter).filter(Boolean);
   const basePath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
-  let shellPath = '';
+  let shellEnv = {};
   try {
-    shellPath = execFileSync(process.env.SHELL || '/bin/zsh', ['-lc', 'printf "%s" "$PATH"'], {
+    // `env -0` prints NUL-separated KEY=VALUE pairs — safe for values with newlines.
+    const raw = execFileSync(process.env.SHELL || '/bin/zsh', ['-lc', 'env -0'], {
       encoding: 'utf8',
       timeout: 3000,
       env: { ...process.env, PATH: basePath },
     });
+    for (const entry of raw.split('\0')) {
+      const eq = entry.indexOf('=');
+      if (eq !== -1) shellEnv[entry.slice(0, eq)] = entry.slice(eq + 1);
+    }
   } catch (error) {
-    console.warn('[Electron] Login shell PATH lookup failed:', error.message);
+    console.warn('[Electron] Login shell env lookup failed:', error.message);
   }
+
+  // Merge shell exports — but never overwrite values already set (by .env or
+  // SEENS_DATA_DIR above), so .env always wins when both are defined.
+  for (const [key, value] of Object.entries(shellEnv)) {
+    if (!(key in process.env)) process.env[key] = value;
+  }
+
+  // PATH gets special treatment: merge all sources for maximum tool coverage.
   process.env.PATH = [...new Set([
     ...splitPath(process.env.SEENS_EXTRA_PATHS),
-    ...splitPath(shellPath),
+    ...splitPath(shellEnv.PATH || ''),
     '/opt/homebrew/bin',
     '/usr/local/bin',
     ...splitPath(basePath),
   ])].join(path.delimiter);
+
+  console.log('[Electron] Shell env merged — HOST:', process.env.HOST || '(unset)', '| PORT:', process.env.PORT || '(unset)');
 }
 
 let tray          = null;

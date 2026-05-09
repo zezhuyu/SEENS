@@ -211,9 +211,10 @@ app.get('*', (req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.PORT ?? '8080');
+const PORT = parseInt(process.env.PORT ?? '7477');
+const HOST = process.env.HOST ?? '127.0.0.1';
 globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
-  const server = app.listen(PORT, '127.0.0.1', () => {
+  const server = app.listen(PORT, HOST, () => {
     const address = server.address();
     const actualPort = typeof address === 'object' && address ? address.port : PORT;
     globalThis.SEENS_SERVER_PORT = actualPort;
