@@ -176,8 +176,29 @@ router.get('/:videoId', async (req, res) => {
     return res.status(502).json({ error: err.message });
   }
 
-  // no-store so Safari re-hits this endpoint on reconnect (we hand out a fresh
-  // CDN URL each time, which stays valid as long as the 4-hour cache is warm)
+  // ?proxy=1 — proxy through this server (e.g. iOS AVPlayer: CDN URL is IP-bound
+  // to the Mac's external IP, so the device can't hit the CDN directly).
+  if (req.query.proxy) {
+    const upstreamHeaders = {};
+    if (req.headers.range) upstreamHeaders['Range'] = req.headers.range;
+    let upstream;
+    try {
+      upstream = await fetch(audioUrl, { headers: upstreamHeaders, signal: AbortSignal.timeout(30_000) });
+    } catch (err) {
+      return res.status(502).json({ error: err.message });
+    }
+    res.status(upstream.status);
+    for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+      const v = upstream.headers.get(h);
+      if (v) res.setHeader(h.replace(/(^|-)\w/g, m => m.toUpperCase()), v);
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    try { await pipeline(Readable.fromWeb(upstream.body), res); } catch { /* client disconnect */ }
+    return;
+  }
+
+  // Default: redirect to CDN URL — Safari manages its own connection natively.
+  // no-store so Safari re-hits this endpoint on reconnect (fresh CDN URL each time)
   res.setHeader('Cache-Control', 'no-store');
   res.redirect(302, audioUrl);
 });

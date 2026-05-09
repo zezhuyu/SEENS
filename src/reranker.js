@@ -408,7 +408,7 @@ export async function findSimilar(track, limit = 20) {
   if (!isRerankerEnabled() || !isSubprocessRunning()) return null;
   const song_id = canonicalSongId(track);
   try {
-    const result = await _call('find_similar', { song_id, limit }, 60_000);
+    const result = await _call('find_similar', { song_id, limit }, 10_000);
     return result?.songs ?? null;
   } catch (err) {
     console.warn('[Reranker] findSimilar failed:', err.message);

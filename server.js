@@ -212,7 +212,7 @@ app.get('*', (req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '7477');
-const HOST = process.env.HOST ?? '127.0.0.1';
+const HOST = process.env.HOST ?? '0.0.0.0';
 globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
   const server = app.listen(PORT, HOST, () => {
     const address = server.address();

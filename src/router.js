@@ -384,28 +384,28 @@ export async function handleInput(input, triggerType = 'user-chat') {
     console.log(`[Router:${triggerType}] ${ts()} reranker pool: ${rerankerPool.length} (${djResponse.play?.length ?? 0} play + ${fresh.length} candidates)`);
   } else if (hasMusicCandidates && isRerankerEnabled()) {
     // Model returned no candidates — auto-expand the pool so the reranker has
-    // enough songs to score. Two-stage fallback:
-    //   1. findSimilar(play[0])  — needs play[0] to be seeded in DB with embeddings
-    //   2. recommend()           — taste-centroid KNN, works as long as user has liked/replayed songs
+    // enough songs to score. Run both DB sources in parallel (fast KNN lookups,
+    // no model inference) and merge unique results.
     const seedTrack = djResponse.play[0];
-    let dbCandidates = await findSimilar(
-      { title: seedTrack.title, artist: seedTrack.artist ?? '' }, 15,
-    ).catch(() => null);
+    const [similarResults, recommendResults] = await Promise.all([
+      findSimilar({ title: seedTrack.title, artist: seedTrack.artist ?? '' }, 15).catch(() => null),
+      recommend(15).catch(() => null),
+    ]);
 
-    let dbSource = 'findSimilar';
-    if (!dbCandidates?.length) {
-      // play[0] not in DB — fall back to taste-based recommendation
-      dbCandidates = await recommend(15).catch(() => null);
-      dbSource = 'recommend';
+    const seen = new Set(rerankerPool.map(t => `${t.title}___${t.artist ?? ''}`));
+    const merged = [];
+    const sources = [];
+    for (const [results, label] of [[similarResults, 'findSimilar'], [recommendResults, 'recommend']]) {
+      if (!results?.length) continue;
+      const fresh = results.filter(r => !seen.has(`${r.title}___${r.artist ?? ''}`))
+        .map(r => ({ title: r.title, artist: r.artist, source: r.source ?? 'any' }));
+      for (const t of fresh) { seen.add(`${t.title}___${t.artist ?? ''}`); merged.push(t); }
+      if (fresh.length) sources.push(`${fresh.length} via ${label}`);
     }
 
-    if (dbCandidates?.length) {
-      const seen = new Set(rerankerPool.map(t => `${t.title}___${t.artist ?? ''}`));
-      const fresh = dbCandidates
-        .filter(r => !seen.has(`${r.title}___${r.artist ?? ''}`))
-        .map(r => ({ title: r.title, artist: r.artist, source: r.source ?? 'any' }));
-      rerankerPool = [...rerankerPool, ...fresh];
-      console.log(`[Router:${triggerType}] ${ts()} reranker pool: ${rerankerPool.length} (${djResponse.play?.length ?? 0} play + ${fresh.length} DB auto-candidates via ${dbSource})`);
+    if (merged.length) {
+      rerankerPool = [...rerankerPool, ...merged];
+      console.log(`[Router:${triggerType}] ${ts()} reranker pool: ${rerankerPool.length} (${djResponse.play?.length ?? 0} play + ${sources.join(', ')} DB auto-candidates)`);
     } else {
       console.log(`[Router:${triggerType}] ${ts()} reranker pool: ${rerankerPool.length} (no DB candidates — reranker not seeded or no taste data yet)`);
     }
