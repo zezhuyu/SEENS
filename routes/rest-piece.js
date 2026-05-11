@@ -1,7 +1,51 @@
 import express from 'express';
+import https from 'https';
 import { readUserFile } from '../src/paths.js';
 import { recordRestPiece, getRecentRestPieces } from '../src/state.js';
 import { callPlugin, loadPlugins, pluginSystemContext } from '../src/plugin-runner.js';
+
+// Node.js native fetch() can't reach api.openai.com in all proxy environments.
+// Use the built-in https module directly for OpenAI API calls.
+function openaiPost(apiKey, requestBody, timeoutMs = 45000) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(requestBody);
+    let settled = false;
+    const settle = (fn, val) => { if (!settled) { settled = true; clearTimeout(timer); fn(val); } };
+
+    const req = https.request({
+      hostname: 'api.openai.com',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type':   'application/json',
+        'Authorization':  `Bearer ${apiKey}`,
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', chunk => { body += chunk; });
+      res.on('error', err => settle(reject, err));   // ECONNRESET during response read
+      res.on('end', () => {
+        settle(resolve, {
+          ok:     res.statusCode >= 200 && res.statusCode < 300,
+          status: res.statusCode,
+          text:   () => Promise.resolve(body),
+          json:   () => Promise.resolve(JSON.parse(body)),
+        });
+      });
+    });
+
+    req.on('error', err => settle(reject, err));
+
+    const timer = setTimeout(() => {
+      req.destroy();
+      settle(reject, new Error(`OpenAI request timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    req.write(payload);
+    req.end();
+  });
+}
 
 const router = express.Router();
 
@@ -340,11 +384,19 @@ async function fetchNASAImage(query) {
 }
 
 router.get('/', async (req, res) => {
+  console.log(`[RestPiece] request — nowTitle=${req.query.nowTitle ?? 'none'} cat=${req.query.cat ?? 'auto'}`);
   const key = process.env.OPENAI_API_KEY;
   if (!key) return res.status(500).json({ error: 'OPENAI_API_KEY not set' });
 
   const requestedCat = req.query.cat;
   const validCat = ALL_CATS.includes(requestedCat) ? requestedCat : null;
+
+  // nowPlaying context: passed from iOS when the user manually triggers a rest break
+  const nowTitle  = req.query.nowTitle  || (req.body && req.body.nowPlaying?.title);
+  const nowArtist = req.query.nowArtist || (req.body && req.body.nowPlaying?.artist);
+  const nowPlayingSection = nowTitle
+    ? `\n\nThe listener was just listening to "${nowTitle}"${nowArtist ? ` by ${nowArtist}` : ''} when they decided to take a break. You may recommend a piece that creates a thoughtful contrast or complementary pause from that music — but the choice should still primarily follow the user's preferences and rest-picker category.`
+    : '';
 
   const prefs = readPrefs();
   const prefsSection = prefs ? `\n\nUser preferences for rest pieces:\n${prefs}` : '';
@@ -360,7 +412,7 @@ router.get('/', async (req, res) => {
     ? `\n\nDo NOT repeat any of these recently shown works — pick something entirely different:\n${recentPieces.map(p => `- "${p.title}"${p.artist ? ` by ${p.artist}` : ''} [${p.cat}]`).join('\n')}`
     : '';
 
-  const pickerSection = `\n\nRest picker: ${selectedCat}${picker.theme ? `\nTheme anchor: ${picker.theme}` : ''}${picker.reason ? `\nPicker reason: ${picker.reason}` : ''}`;
+  const pickerSection = `\n\nRest picker: ${selectedCat}${picker.theme ? `\nTheme anchor: ${picker.theme}` : ''}${picker.reason ? `\nPicker reason: ${picker.reason}` : ''}${nowPlayingSection}`;
 
   const audioDirectiveSection = picker.cat && ['Quote', 'Podcast', 'Music', 'White Noise'].includes(selectedCat)
     ? `\n\nRest audio / quote directive selected by the picker: ${selectedCat}. Use this when the user has asked for rest-time audio or a quote.`
@@ -477,20 +529,16 @@ Rules:
 - Do not invent URLs or quotes.`;
 ;
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model: process.env.CODEX_MODEL ?? 'gpt-4o-mini',
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        max_tokens: isStoryMode ? 700 : 650,
-        temperature: 1.05,
-      }),
-    });
+    const response = await openaiPost(key, {
+      model: process.env.REST_PIECE_MODEL ?? 'gpt-4o-mini',
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
+      max_tokens: isStoryMode ? 700 : 650,
+      temperature: 1.05,
+    }, 45000);
 
     if (!response.ok) {
       const errText = await response.text();
@@ -539,20 +587,16 @@ If it returned only text, summarize it into the rest recommendation.
 
 Return JSON with exactly the same fields as before.`;
 
-        const followup = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-          body: JSON.stringify({
-            model: process.env.CODEX_MODEL ?? 'gpt-4o-mini',
-            response_format: { type: 'json_object' },
-            messages: [
-              { role: 'system', content: pluginPrompt },
-              { role: 'user', content: `[Data fetched]\n${JSON.stringify(trimmedData, null, 2)}` },
-            ],
-            max_tokens: 700,
-            temperature: 0.9,
-          }),
-        });
+        const followup = await openaiPost(key, {
+          model: process.env.REST_PIECE_MODEL ?? 'gpt-4o-mini',
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: pluginPrompt },
+            { role: 'user', content: `[Data fetched]\n${JSON.stringify(trimmedData, null, 2)}` },
+          ],
+          max_tokens: 700,
+          temperature: 0.9,
+        }, 30000);
 
         if (followup.ok) {
           const followupData = await followup.json();
@@ -631,9 +675,11 @@ Return JSON with exactly the same fields as before.`;
     }
 
     recordRestPiece({ title: piece.title, artist: piece.artist ?? '', cat: piece.cat });
+    console.log(`[RestPiece] responding — "${piece.title}" [${piece.cat}]`);
     res.json({ ...piece, ...gradient, imageUrl });
   } catch (err) {
-    console.error('[RestPiece]', err.message);
+    const cause = err.cause?.message ?? err.cause ?? '';
+    console.error(`[RestPiece] error: ${err.message}${cause ? ` — cause: ${cause}` : ''}`);
     res.status(500).json({ error: err.message });
   }
 });

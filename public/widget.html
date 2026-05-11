@@ -1714,7 +1714,7 @@ function playNotificationSound() {
 }
 
 // ── SeensWidget ──────────────────────────────────────────────────────────────
-function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, categoryFilter, setCategoryFilter }) {
+function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, accent, volume, setVolume, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, categoryFilter, setCategoryFilter }) {
   // ── state
   const [now, setNow]                   = useState(new Date());
   const [sessionSecs, setSessionSecs]   = useState(0);
@@ -2832,8 +2832,9 @@ function SeensWidget({ size, setSize, dark, setDark, accent, volume, setVolume, 
         <span className="title-name">SEENS{djAgent ? ` · ${djAgent}` : ''}</span>
         <div className="title-right">
           <div className="theme-pill">
-            <button className={!dark?'active':''} onClick={() => setDark(false)}>L</button>
-            <button className={dark?'active':''} onClick={() => setDark(true)}>D</button>
+            <button className={themeMode==='light'?'active':''} onClick={() => setThemeMode('light')}>L</button>
+            <button className={themeMode==='auto'?'active':''} onClick={() => setThemeMode('auto')}>A</button>
+            <button className={themeMode==='dark'?'active':''} onClick={() => setThemeMode('dark')}>D</button>
           </div>
           <div className="notif-wrap">
             <button className="size-toggle" onClick={() => { setShowNotifications(v => !v); if (!showNotifications) setUnreadCount(0); }} aria-label="Notifications">
@@ -3214,7 +3215,26 @@ function getElectronSize() { return window.innerHeight < 420 ? 'mini' : 'expande
 
 function App() {
   const [size,            setSize]            = useState(isElectronApp ? getElectronSize() : 'expanded');
-  const [dark,            setDark]            = useState(true);
+  // 'light' | 'auto' | 'dark'
+  const [themeMode, setThemeMode] = useState(() => localStorage.getItem('seens-theme') ?? 'auto');
+  const sysDark = window.matchMedia('(prefers-color-scheme: dark)');
+  const [dark, setDarkRaw] = useState(() => {
+    const saved = localStorage.getItem('seens-theme') ?? 'auto';
+    if (saved === 'dark')  return true;
+    if (saved === 'light') return false;
+    return sysDark.matches;
+  });
+  const setDark = (val) => { setDarkRaw(val); };
+  useEffect(() => {
+    localStorage.setItem('seens-theme', themeMode);
+    if (themeMode === 'dark')  { setDarkRaw(true);  return; }
+    if (themeMode === 'light') { setDarkRaw(false); return; }
+    // auto — follow system
+    setDarkRaw(sysDark.matches);
+    const handler = (e) => setDarkRaw(e.matches);
+    sysDark.addEventListener('change', handler);
+    return () => sysDark.removeEventListener('change', handler);
+  }, [themeMode]);
 
   // In Electron, drive mini vs expanded from the window height automatically
   useEffect(() => {
@@ -3256,6 +3276,7 @@ function App() {
       <SeensWidget
         size={size} setSize={setSize}
         dark={dark} setDark={setDark}
+        themeMode={themeMode} setThemeMode={setThemeMode}
         accent={accent}
         volume={volume} setVolume={setVolume}
         restIntervalMin={restIntervalMin} setRestIntervalMin={setRestIntervalMin}
