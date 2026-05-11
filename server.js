@@ -62,6 +62,7 @@ const { default: feedbackRoute }     = await import('./routes/feedback.js');
 const { default: notifyRoute }       = await import('./routes/notify.js');
 const { default: pluginsRoute }          = await import('./routes/plugins.js');
 const { default: musicConnectorsRoute }  = await import('./routes/music-connectors.js');
+const { default: widgetRoute }           = await import('./routes/widget.js');
 const streamHandler                  = (await import('./routes/stream.js')).default;
 
 app.use('/api/stream', streamAudioRoute);
@@ -82,6 +83,7 @@ app.use('/api/feedback', feedbackRoute);
 app.use('/api/notify', notifyRoute);
 app.use('/api/plugins', pluginsRoute);
 app.use('/api/music-connectors', musicConnectorsRoute);
+app.use('/api/widget', widgetRoute);
 app.ws('/stream', streamHandler);
 
 // Apple Music user token endpoint (POSTed from MusicKit JS in the browser)
