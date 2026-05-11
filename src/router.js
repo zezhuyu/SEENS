@@ -7,6 +7,7 @@ import { broadcast } from './ws-broadcast.js';
 import { resolveTracksOrdered } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
 import { callPlugin } from './plugin-runner.js';
+import { fetchTrackContext } from './track-context.js';
 
 // Truncate large text fields in plugin data before sending to the AI.
 // Full article bodies / transcripts can be thousands of tokens; summaries are enough.
@@ -359,6 +360,15 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // when the last current song is nearly done. Generating it here would race and steal the intro.
   const shouldSynthesize = !!djResponse.say && (hasTracks || chatSpeakOn) && !isAutoRefill;
 
+  // ── Track context (Wikipedia) ────────────────────────────────────────────────
+  // Kicked off immediately after the AI call so it runs in parallel with reranking
+  // and resolution (~5-15s). By intro-generation time it's already done (<1s fetch).
+  // Only for spoken intros; skip plugin tracks (they have their own audio/content).
+  const _ctxSeed = djResponse.play?.[0];
+  const trackContextPromise = (shouldSynthesize && _ctxSeed && !djResponse.pluginCall?.plugin)
+    ? fetchTrackContext(_ctxSeed.title, _ctxSeed.artist ?? '').catch(() => null)
+    : Promise.resolve(null);
+
   // Active song resolved early (before generate()) — reuse here with full camelCase shape.
   const activeSong = earlyActiveSong ? {
     title:          earlyActiveSong.title,
@@ -696,6 +706,7 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // Final DJ intro must be based on the actual queued order, not the AI's
   // pre-rerank guess. If the reranker changed the session, ask the DJ to write a
   // fresh intro from the resolved/reranked playlist, then synthesize that text.
+  // Also enriches the intro with Wikipedia background on the first track when available.
   let finalSay = djResponse.say;
   let ttsUrl = null;
   let finalSayChanged = false;
@@ -711,30 +722,60 @@ export async function handleInput(input, triggerType = 'user-chat') {
   const playlistChangedAfterDjDraft = !!finalRanked?.length ||
     (resolvedTracks[0] && firstPlayable && firstPlayable !== resolvedTracks[0]);
 
-  if (playlistChangedAfterDjDraft && introPlaylist.length > 0 && finalRanked?.length && firstTrack?.source !== 'plugin') {
-    const introPrompt = [
-      'The recommendation engine has reranked the playlist after your first draft.',
-      'Write a fresh, concise DJ intro for the FINAL playlist order below.',
-      'The first sentence must introduce the first track exactly as the first song.',
-      'Do not mention or imply any song outside this final playlist.',
-      'Keep the same listener intent and vibe from the original user request.',
-      '',
-      `Original user request: ${trimmed}`,
-      `Previous intro, now stale: ${finalSay ?? ''}`,
-      'Final playlist order:',
-      ...introPlaylist.slice(0, 12).map((t, i) => `${i + 1}. ${t.title}${t.artist ? ` — ${t.artist}` : ''}`),
-      '',
-      'Return JSON. Only the say field matters; keep play/candidates empty.'
-    ].join('\n');
+  // Await the Wikipedia fetch (started in parallel with reranking — should already be done)
+  const trackContext = await trackContextPromise;
+  if (trackContext) console.log(`[Router:${triggerType}] ${ts()} track context ready (${trackContext.length} chars)`);
+
+  const needsIntroRewrite = firstTrack?.source !== 'plugin' && introPlaylist.length > 0 &&
+    (playlistChangedAfterDjDraft || !!trackContext);
+
+  if (needsIntroRewrite) {
+    const trackContextSection = trackContext
+      ? [
+          '',
+          'Background research for the first track — use specific, interesting details naturally.',
+          "Weave them into the intro rather than reciting them. Don't open with a fact dump.",
+          trackContext,
+        ].join('\n')
+      : '';
+
+    const introPrompt = playlistChangedAfterDjDraft
+      ? [
+          'The recommendation engine has reranked the playlist after your first draft.',
+          'Write a fresh, concise DJ intro for the FINAL playlist order below.',
+          'The first sentence must introduce the first track exactly as the first song.',
+          'Do not mention or imply any song outside this final playlist.',
+          'Keep the same listener intent and vibe from the original user request.',
+          trackContextSection,
+          '',
+          `Original user request: ${trimmed}`,
+          `Previous intro, now stale: ${finalSay ?? ''}`,
+          'Final playlist order:',
+          ...introPlaylist.slice(0, 12).map((t, i) => `${i + 1}. ${t.title}${t.artist ? ` — ${t.artist}` : ''}`),
+          '',
+          'Return JSON. Only the say field matters; keep play/candidates empty.',
+        ].join('\n')
+      : [
+          'Rewrite your DJ intro for the track below using the background research provided.',
+          'Make it feel informed and personal — 2-3 sentences, warm radio tone.',
+          'Introduce the track naturally; weave in one interesting detail from the research.',
+          "Don't open with a fact. Don't recite Wikipedia. Make it feel like insider knowledge.",
+          trackContextSection,
+          '',
+          `Track: ${introPlaylist[0]?.title}${introPlaylist[0]?.artist ? ` — ${introPlaylist[0].artist}` : ''}`,
+          `Original intro: ${finalSay ?? ''}`,
+          '',
+          'Return JSON. Only the say field matters; keep play/candidates empty.',
+        ].join('\n');
 
     const introResponse = await generate(systemPrompt, introPrompt).catch(err => {
-      console.warn(`[Router:${triggerType}] reranked-intro AI call failed:`, err.message);
+      console.warn(`[Router:${triggerType}] enriched-intro AI call failed:`, err.message);
       return null;
     });
     if (introResponse?.say) {
       finalSay = introResponse.say;
       finalSayChanged = true;
-      console.log(`[Router:${triggerType}] ${ts()} reranked intro generated for final playlist — say="${finalSay.slice(0, 120)}"`);
+      console.log(`[Router:${triggerType}] ${ts()} enriched intro — say="${finalSay.slice(0, 120)}"`);
     }
   }
 
