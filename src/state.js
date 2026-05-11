@@ -256,6 +256,13 @@ export function clearQueue() {
   db.prepare('DELETE FROM queue').run();
 }
 
+// Clear queue + reset session state — called when the user ends a session.
+export function clearSession() {
+  db.prepare('DELETE FROM queue').run();
+  db.prepare("INSERT OR REPLACE INTO prefs (key, value) VALUES ('session.started_at', '0')").run();
+  db.prepare("INSERT OR REPLACE INTO prefs (key, value) VALUES ('session.context', '')").run();
+}
+
 // Remove the first n items from the queue so the item at index n becomes next
 export function skipToIndex(n) {
   if (n <= 0) return;

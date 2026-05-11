@@ -15,7 +15,7 @@
 
 import schedule   from 'node-schedule';
 import { handleInput } from './router.js';
-import { savePlan, peekNext } from './state.js';
+import { savePlan, peekNext, getPref } from './state.js';
 import { userPath, ensureUserDir, readUserFile } from './paths.js';
 import fs from 'fs';
 
@@ -200,6 +200,14 @@ function _scheduleAll(sessions) {
   _jobs = [];
   for (const session of sessions) {
     const job = schedule.scheduleJob(session.cron, async () => {
+      // Only enqueue music when the user has an active session.
+      // Without this guard the scheduler would pre-populate the queue before
+      // the user starts a session, making the widget show an active state.
+      const sessionActive = parseInt(getPref('session.started_at', '0')) > 0;
+      if (!sessionActive) {
+        console.log(`[Scheduler] Skipping ${session.name} — no active session`);
+        return;
+      }
       console.log(`[Scheduler] Triggering: ${session.name}`);
       try {
         const result = await handleInput(_buildSessionPrompt(session), session.name);

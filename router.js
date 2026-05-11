@@ -47,12 +47,9 @@ export async function handleInput(input, triggerType = 'user-chat') {
   const t0 = Date.now();
   const ts = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
 
-  // Ensure a session epoch exists so session-level suggestion dedup always works.
-  // Without this, getSessionSuggestions() falls back to today's suggestions only.
-  if (!parseInt(getPref('session.started_at', '0'))) {
-    setSessionStart();
-    console.log(`[Router] Auto-started new session`);
-  }
+  // Do NOT auto-start session on chat — session.started_at is set only when the
+  // user explicitly starts a session (Start Session / Tune In). This prevents the
+  // widget from showing an active session/timer while a playlist is merely pre-generated.
 
   // AI-powered response
   addMessage('user', trimmed);

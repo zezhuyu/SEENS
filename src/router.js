@@ -81,16 +81,19 @@ export async function handleInput(input, triggerType = 'user-chat') {
   const t0 = Date.now();
   const ts = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
 
-  // Session lifecycle: start a new session if none exists, or if the last activity
-  // was more than 3 hours ago (user came back after a break = fresh dedup slate).
+  // Session lifecycle: if the last activity was more than 3 hours ago, treat it
+  // as a new session (reset dedup slate). Do NOT auto-start the session here —
+  // session.started_at is set only when the user explicitly starts a session
+  // (via Start Session / Tune In), so the widget correctly shows inactive state
+  // when a playlist is pre-generated but no session has been started yet.
   const SESSION_EXPIRY = 3 * 3600;
   const nowSec = Math.floor(Date.now() / 1000);
   const startedAt = parseInt(getPref('session.started_at', '0')) || 0;
   const lastActivity = parseInt(getPref('session.last_activity', '0')) || 0;
   const sessionExpired = startedAt > 0 && lastActivity > 0 && (nowSec - lastActivity) > SESSION_EXPIRY;
-  if (!startedAt || sessionExpired) {
+  if (sessionExpired) {
     setSessionStart();
-    console.log(`[Router] ${sessionExpired ? 'Session expired — resetting' : 'New session started'}`);
+    console.log('[Router] Session expired — resetting');
   }
   setPref('session.last_activity', String(nowSec));
 

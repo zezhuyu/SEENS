@@ -63,6 +63,7 @@ const { default: notifyRoute }       = await import('./routes/notify.js');
 const { default: pluginsRoute }          = await import('./routes/plugins.js');
 const { default: musicConnectorsRoute }  = await import('./routes/music-connectors.js');
 const { default: widgetRoute }           = await import('./routes/widget.js');
+const { default: endSessionRoute }       = await import('./routes/end-session.js');
 const streamHandler                  = (await import('./routes/stream.js')).default;
 
 app.use('/api/stream', streamAudioRoute);
@@ -84,6 +85,7 @@ app.use('/api/notify', notifyRoute);
 app.use('/api/plugins', pluginsRoute);
 app.use('/api/music-connectors', musicConnectorsRoute);
 app.use('/api/widget', widgetRoute);
+app.use('/api/end-session', endSessionRoute);
 app.ws('/stream', streamHandler);
 
 // Apple Music user token endpoint (POSTed from MusicKit JS in the browser)
@@ -234,6 +236,14 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
     // Auto-spawn reranker subprocess if it was enabled in a previous session.
     import('./src/reranker.js').then(({ isRerankerEnabled, enableReranker }) => {
       if (isRerankerEnabled()) enableReranker();
+    });
+
+    // On startup, always reset session state — a session ends when the server
+    // restarts (the DJ has stopped). This also clears the queue so leftover
+    // tracks from a previous session don't appear before the user starts a new one.
+    import('./src/state.js').then(({ clearSession }) => {
+      clearSession();
+      console.log('[Server] Session reset on startup — ready for new session');
     });
 
     // Start scheduler after server is up

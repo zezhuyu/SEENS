@@ -2773,7 +2773,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
     setTimeTotal('0:00');
     setProgress(0);
     setOverlayLabel('Tune in');
-    fetch('/api/settings/queue/clear', { method: 'POST' }).catch(() => {});
+    fetch('/api/end-session', { method: 'POST' }).catch(() => {});
   }, []);
   const nextPiece = () => {
     // Cancel any in-flight narration for the current piece before replacing it

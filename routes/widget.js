@@ -33,14 +33,16 @@ router.get('/', async (req, res) => {
   const [lastPlayed] = getRecentPlays(1);
   const queued = peekNext();           // all queued tracks
 
-  // Session is "active" if there is a known now-playing or queued track
-  const sessionStartedAt = parseInt(getPref('session.started_at', '0')) || null;
-  const sessionActive = !!(lastPlayed || queued.length > 0);
+  // Session is "active" only if it was explicitly started (session.started_at > 0)
+  // and not yet ended. clearSession() resets session.started_at to 0 on end-session,
+  // so this correctly returns false even if plays history or queue rows still exist.
+  const sessionStartedAt = parseInt(getPref('session.started_at', '0')) || 0;
+  const sessionActive = sessionStartedAt > 0 && !!(lastPlayed || queued.length > 0);
 
   // work / rest minutes — stored by the server when the iOS app syncs them,
   // otherwise falls back to the defaults used across the project.
-  const workMinutes = parseInt(getPref('settings.work_minutes', '45')) || 45;
-  const restMinutes = parseInt(getPref('settings.rest_minutes', '5'))  || 5;
+  const workMinutes = parseInt(getPref('session.workMin', '45')) || 45;
+  const restMinutes = parseInt(getPref('session.restMin', '5'))  || 5;
   const moodLabel   = getSessionMoodLabel() || null;
 
   // Build now-playing object
