@@ -118,11 +118,28 @@ export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode =
   for (const t of recentCrossSessionSuggestions) hardBlockTracks.set(key(t), t);
   const hardBlockList = [...hardBlockTracks.values()];
 
+  // Artist-level saturation: count how many tracks each artist has in the hard-block window.
+  // Artists with ≥3 blocked tracks are "saturated" — picking more from them hurts variety.
+  const artistBlockCount = new Map();
+  for (const t of hardBlockList) {
+    const a = (t.artist ?? '').trim().toLowerCase();
+    if (a) artistBlockCount.set(a, (artistBlockCount.get(a) ?? 0) + 1);
+  }
+  const saturatedArtists = [...artistBlockCount.entries()]
+    .filter(([, n]) => n >= 3)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20);
+
   const suggestionHistory = [
     hardBlockList.length
       ? `⛔ ABSOLUTE HARD BLOCK — ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} you MUST NOT suggest (already played or suggested in the last 7 days):\n${
           hardBlockList.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
         }\nEven if a title or artist appears in your Library or Discoveries sections, skip it if it's listed here.`
+      : '',
+    saturatedArtists.length
+      ? `⚠️ Saturated artists — these artists have ${saturatedArtists[0]?.[1] ?? 3}+ blocked tracks from recent sessions. Picking more songs from them adds no variety. Use your AI knowledge to find different artists:\n${
+          saturatedArtists.map(([a, n]) => `- ${a} (${n} blocked tracks)`).join('\n')
+        }`
       : '',
     olderCrossSessionSuggestions.length
       ? `Tracks suggested more than a week ago — avoid repeating unless user explicitly requests:\n${
@@ -204,6 +221,9 @@ export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode =
     // to the beginning and end. This double-anchoring prevents session repeats.
     hardBlockList.length
       ? `## ⛔ Final Reminder — Do Not Repeat\nYou MUST NOT suggest any of these ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} — already played or suggested in the last 7 days:\n${hardBlockList.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')}`
+      : '',
+    saturatedArtists.length
+      ? `## 🎯 Variety Reminder\nThese artists are over-represented in recent sessions. **Do NOT pick more songs from them** — use your AI knowledge to discover different artists instead:\n${saturatedArtists.map(([a, n]) => `- ${a} (${n} tracks already blocked)`).join('\n')}`
       : '',
   ].filter(Boolean).join('\n\n---\n\n');
 }

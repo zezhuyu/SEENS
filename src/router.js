@@ -785,11 +785,18 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // Safety net: if the generated intro still does not name the actual first
   // playable track, replace it with a deterministic one-track intro rather than
   // allowing stale TTS/text to announce a different song.
-  if (playlistChangedAfterDjDraft && firstTrack && finalSay && firstTrack.source !== 'plugin') {
-    const title = (firstTrack.resolvedTitle ?? firstTrack.title ?? '').toLowerCase();
+  // Run unconditionally (not just when playlistChangedAfterDjDraft) — catches mismatches
+  // from any cause: reranking, skips, queue refresh, AI hallucination.
+  if (firstTrack && finalSay && firstTrack.source !== 'plugin') {
+    const title  = (firstTrack.resolvedTitle  ?? firstTrack.title  ?? '').toLowerCase();
+    const artist = (firstTrack.resolvedArtist ?? firstTrack.artist ?? '').toLowerCase();
     const sayLower = finalSay.toLowerCase();
-    const titleWords = title.split(/\s+/).filter(w => w.length > 3);
-    const titleMissing = titleWords.length > 0 && !titleWords.some(w => sayLower.includes(w));
+    // Use words > 2 chars (catches short titles like "Us", "It", "OK")
+    const titleWords  = title.split(/\s+/).filter(w => w.length > 2);
+    const artistWords = artist.split(/\s+/).filter(w => w.length > 2);
+    const titleMentioned  = titleWords.length  === 0 || titleWords.some(w => sayLower.includes(w));
+    const artistMentioned = artistWords.length === 0 || artistWords.some(w => sayLower.includes(w));
+    const titleMissing = !titleMentioned && !artistMentioned;
     if (titleMissing) {
       const displayTitle  = firstTrack.resolvedTitle  ?? firstTrack.title;
       const displayArtist = firstTrack.resolvedArtist ?? firstTrack.artist ?? '';
