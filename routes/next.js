@@ -23,8 +23,8 @@ function refillFromHistory() {
   const recent = getRecentPlays(10);
   const artists = [...new Set(recent.map(p => p.artist).filter(Boolean))].slice(0, 5);
   const prompt = artists.length
-    ? `Based on my recent listening history (${artists.join(', ')}), queue 8 more tracks I'll enjoy. Vary the mood and avoid repeating what was just played. Also include 10-15 candidates for the recommendation engine.`
-    : 'Queue 8 tracks based on my taste profile and the current time of day. Also include 10-15 candidates for the recommendation engine.';
+    ? `The queue just ran low. Queue 8 more tracks that fit the current session mood. Recent artists: ${artists.join(', ')} — use these as taste anchors, not as the only source. Pick a mix of familiar artists AND music I haven't heard yet (set source:"any" on your own AI-curated discoveries). Shift the energy slightly from what just played to keep the session feeling fresh. Also include 10-15 candidates for the recommendation engine.`
+    : 'The queue just ran low. Queue 8 tracks based on my taste profile and the current time of day — include a mix of library artists and fresh AI-curated discoveries (source:"any"). Also include 10-15 candidates for the recommendation engine.';
 
   console.log('[Queue] Low — auto-refilling from history');
   handleInput(prompt, 'auto-refill')

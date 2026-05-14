@@ -30,14 +30,21 @@ router.get('/', async (req, res) => {
     new Promise(resolve => setTimeout(() => resolve(null), 800)),
   ]);
 
-  const [lastPlayed] = getRecentPlays(1);
-  const queued = peekNext();           // all queued tracks
-
-  // Session is "active" only if it was explicitly started (session.started_at > 0)
-  // and not yet ended. clearSession() resets session.started_at to 0 on end-session,
-  // so this correctly returns false even if plays history or queue rows still exist.
   const sessionStartedAt = parseInt(getPref('session.started_at', '0')) || 0;
-  const sessionActive = sessionStartedAt > 0 && !!(lastPlayed || queued.length > 0);
+  const queued = peekNext(9);
+
+  // Filter plays to the current session only (played_at >= session start).
+  // This prevents a track from a previous session leaking in as nowPlaying.
+  const recentPlays = sessionStartedAt > 0
+    ? getRecentPlays(5).filter(p => p.played_at >= sessionStartedAt)
+    : [];
+  const [lastPlayed] = recentPlays;
+
+  // Session is "active" only if explicitly started AND not stale.
+  // Staleness: no queue tracks remaining AND last play was > 10 minutes ago.
+  const tenMinAgo = Math.floor(Date.now() / 1000) - 10 * 60;
+  const recentlyPlayed = lastPlayed && lastPlayed.played_at >= tenMinAgo;
+  const sessionActive = sessionStartedAt > 0 && !!(queued.length > 0 || recentlyPlayed);
 
   // work / rest minutes — stored by the server when the iOS app syncs them,
   // otherwise falls back to the defaults used across the project.

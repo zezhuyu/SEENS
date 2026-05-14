@@ -620,7 +620,32 @@ export async function handleInput(input, triggerType = 'user-chat') {
       seenFinal.add(k);
       return true;
     });
-    finalDjResponse = { ...finalDjResponse, play: dedupedFill.slice(0, playLen) };
+
+    // AI-sourced quota enforcement: the reranker scores by taste-vector similarity,
+    // which always favours known library tracks over fresh AI-curated picks (source:"any").
+    // Result without this: AI-curated songs lose every head-to-head and never make the
+    // final playLen cut, so the playlist is 100% library recycling.
+    //
+    // Fix: guarantee at least AI_MIN_NEW slots go to source:"any" tracks.
+    // We pull them from the full reranker pool (before the playLen slice) so they are
+    // still ordered by their reranker score — just rescued from below the cut-line.
+    const AI_MIN_NEW = 3;  // at least 3 of playLen songs must be fresh AI discoveries
+    let finalPlay = dedupedFill.slice(0, playLen);
+    const aiCount = finalPlay.filter(t => t.source === 'any').length;
+    if (aiCount < AI_MIN_NEW) {
+      // Collect AI-sourced tracks from the reranker pool that didn't make the cut
+      const inFinal = new Set(finalPlay.map(t => `${t.title ?? ''}___${t.artist ?? ''}`));
+      const aiRescued = qualifiedFill
+        .filter(t => t.source === 'any' && !inFinal.has(`${t.title ?? ''}___${t.artist ?? ''}`))
+        .slice(0, AI_MIN_NEW - aiCount);
+      if (aiRescued.length > 0) {
+        // Replace the lowest-scoring library tracks at the tail to keep playLen constant
+        finalPlay = [...finalPlay.slice(0, playLen - aiRescued.length), ...aiRescued];
+        console.log(`[Router:${triggerType}] ${ts()} AI-sourced quota: rescued ${aiRescued.length} source:any tracks (had ${aiCount}/${AI_MIN_NEW} minimum)`);
+      }
+    }
+
+    finalDjResponse = { ...finalDjResponse, play: finalPlay };
     finalRanked = ranked;
 
   } else if (rerankResult.status === 'rejected') {
@@ -690,9 +715,14 @@ export async function handleInput(input, triggerType = 'user-chat') {
     try { addToQueue(djResponse.play.map(t => ({ source: t.source ?? 'any', title: t.title, artist: t.artist ?? '', uri: null }))); } catch {}
   }
 
-  // Always record every suggested track so the dedup list stays accurate.
+  // Always record every suggested track (play + candidates) so the dedup list stays accurate.
+  // Candidates are included because the reranker sees them — if they're not blocked, the AI
+  // will keep generating the same candidate pool session after session.
   // Use resolved titles when available (more canonical); fall back to the raw AI suggestion.
-  const tracksToRecord = resolvedTracks.length > 0 ? resolvedTracks : (djResponse.play ?? []);
+  const tracksToRecord = [
+    ...(resolvedTracks.length > 0 ? resolvedTracks : (djResponse.play ?? [])),
+    ...(djResponse.candidates ?? []),
+  ];
   try { recordSuggestions(tracksToRecord); } catch (err) {
     console.warn(`[Router:${triggerType}] recordSuggestions failed:`, err.message);
   }

@@ -248,8 +248,8 @@ export function dequeue() {
   };
 }
 
-export function peekNext() {
-  return db.prepare('SELECT * FROM queue ORDER BY position ASC LIMIT 2').all();
+export function peekNext(limit = 2) {
+  return db.prepare('SELECT * FROM queue ORDER BY position ASC LIMIT ?').all(limit);
 }
 
 export function clearQueue() {
