@@ -65,6 +65,23 @@ try {
   console.error = (...a) => { try { origErr(...a); } catch (e) { if (e.code !== 'EPIPE') throw e; } writeLine('[ERR] ', a); };
 } catch (e) { /* log redirect failed — continue silently */ }
 
+// Catch any exception/rejection that wasn't handled elsewhere — these would
+// otherwise kill the process silently with no log entry.
+// Use appendFileSync (synchronous) so the write completes before process exits.
+process.on('uncaughtException', (err, origin) => {
+  const line = `\n[CRASH] ${new Date().toISOString()} uncaughtException (${origin})\n${err?.stack || err}\n`;
+  try { fs.appendFileSync(LOG_PATH, line); } catch { /* nowhere left to write */ }
+  console.error('[CRASH] uncaughtException:', err);
+  // Don't call process.exit here — let Electron decide. The error is now logged.
+});
+
+process.on('unhandledRejection', (reason) => {
+  const text = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+  const line = `\n[CRASH] ${new Date().toISOString()} unhandledRejection\n${text}\n`;
+  try { fs.appendFileSync(LOG_PATH, line); } catch { /* nowhere left to write */ }
+  console.error('[CRASH] unhandledRejection:', reason);
+});
+
 // Disable Chromium's autoplay policy so DJ audio and music play without a
 // prior user gesture on every track (Electron enforces this by default).
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
