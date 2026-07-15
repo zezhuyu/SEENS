@@ -95,21 +95,25 @@ const USE_EPHEMERAL_SERVER_PORT = false;
 // directory so writes survive app updates and aren't blocked inside the bundle.
 process.env.SEENS_DATA_DIR = app.getPath('userData');
 
-// Load .env before anything else so process.env.PORT is available to both
-// this file and to server.js (which also calls dotenv internally).
+// Preserve values inherited from a terminal launch before dotenv fills any
+// missing keys. These have highest precedence over .env and login-shell values.
+const inheritedSeensIp = process.env.SEENS_IP;
+const inheritedSeensPort = process.env.SEENS_PORT;
+
+// Load .env before anything else so its settings are available to both this
+// file and server.js (which also calls dotenv internally).
 const _dotenvResult = require('dotenv').config({ path: path.join(ROOT, '.env') });
 if (_dotenvResult.error) {
   console.error('[Electron] .env load FAILED:', _dotenvResult.error.message);
 } else {
-  console.log('[Electron] .env loaded — PORT:', process.env.PORT, '| OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓ set' : '✗ MISSING', '| AI_AGENT:', process.env.AI_AGENT);
+  console.log('[Electron] .env loaded — SEENS_IP:', process.env.SEENS_IP || '(unset)', '| SEENS_PORT:', process.env.SEENS_PORT || '(unset)', '| OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓ set' : '✗ MISSING', '| AI_AGENT:', process.env.AI_AGENT);
 }
 
-let PORT = parseInt(process.env.PORT || '7477', 10);
 let serverPort = null;
 
 // Finder-launched apps do not inherit the user's shell PATH or exports.
-// Run a login shell to capture the full environment (PATH, HOST, PORT, etc.)
-// then merge it in. .env values written above take precedence over shell exports.
+// Run a login shell to capture the full environment (PATH, SEENS_IP,
+// SEENS_PORT, etc.) then merge it in.
 {
   const splitPath = (value) => String(value || '').split(path.delimiter).filter(Boolean);
   const basePath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
@@ -129,11 +133,18 @@ let serverPort = null;
     console.warn('[Electron] Login shell env lookup failed:', error.message);
   }
 
-  // Merge shell exports — but never overwrite values already set (by .env or
-  // SEENS_DATA_DIR above), so .env always wins when both are defined.
+  // Merge general shell exports without replacing app/.env values.
   for (const [key, value] of Object.entries(shellEnv)) {
     if (!(key in process.env)) process.env[key] = value;
   }
+
+  // Listening configuration explicitly comes from the launching terminal or
+  // login shell when present. This lets Finder-launched builds see exports from
+  // the user's global shell profile while direct terminal values remain first.
+  if (inheritedSeensIp !== undefined) process.env.SEENS_IP = inheritedSeensIp;
+  else if (shellEnv.SEENS_IP !== undefined) process.env.SEENS_IP = shellEnv.SEENS_IP;
+  if (inheritedSeensPort !== undefined) process.env.SEENS_PORT = inheritedSeensPort;
+  else if (shellEnv.SEENS_PORT !== undefined) process.env.SEENS_PORT = shellEnv.SEENS_PORT;
 
   // PATH gets special treatment: merge all sources for maximum tool coverage.
   process.env.PATH = [...new Set([
@@ -144,7 +155,21 @@ let serverPort = null;
     ...splitPath(basePath),
   ])].join(path.delimiter);
 
-  console.log('[Electron] Shell env merged — HOST:', process.env.HOST || '(unset)', '| PORT:', process.env.PORT || '(unset)');
+  console.log('[Electron] Shell env merged — SEENS_IP:', process.env.SEENS_IP || '(unset)', '| SEENS_PORT:', process.env.SEENS_PORT || '(unset)');
+}
+
+let PORT = parseInt(process.env.SEENS_PORT || process.env.PORT || '7477', 10);
+const LISTEN_IP = process.env.SEENS_IP || process.env.HOST || '0.0.0.0';
+
+// Wildcard listener addresses cannot be used as a browser destination. Use the
+// corresponding loopback address while retaining explicit bind addresses.
+const SERVER_HOST = LISTEN_IP === '0.0.0.0'
+  ? '127.0.0.1'
+  : (LISTEN_IP === '::' || LISTEN_IP === '[::]') ? '::1' : LISTEN_IP;
+const SERVER_URL_HOST = SERVER_HOST.includes(':') ? `[${SERVER_HOST}]` : SERVER_HOST;
+
+function serverUrl(port, pathname = '') {
+  return `http://${SERVER_URL_HOST}:${port}${pathname}`;
 }
 
 let tray          = null;
@@ -189,7 +214,7 @@ function waitForServer(retries = 60) {
         return reject(new Error('server port not published'));
       }
 
-      http.get(`http://127.0.0.1:${port}/api/ready`, (res) => {
+      http.get(serverUrl(port, '/api/ready'), (res) => {
         let body = '';
         res.setEncoding('utf8');
         res.on('data', chunk => { body += chunk; });
@@ -229,7 +254,7 @@ function createWindow(port = serverPort || PORT) {
     },
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${port}/widget.html`);
+  mainWindow.loadURL(serverUrl(port, '/widget.html'));
   mainWindow.show();
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
@@ -345,7 +370,7 @@ function refreshTrayMenu() {
   if (!tray) return;
   const port = serverPort || PORT;
   if (!port) return;
-  http.get(`http://127.0.0.1:${port}/api/now?full=1`, (res) => {
+  http.get(serverUrl(port, '/api/now?full=1'), (res) => {
     let raw = '';
     res.setEncoding('utf8');
     res.on('data', c => { raw += c; });
@@ -435,7 +460,7 @@ app.whenReady().then(async () => {
     const body = JSON.stringify({ message: msg });
     await new Promise((resolve, reject) => {
       const req = http.request(
-        { host: '127.0.0.1', port, path: '/api/chat', method: 'POST',
+        { host: SERVER_HOST, port, path: '/api/chat', method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
         res => { res.resume(); res.on('end', resolve); }
       );
@@ -452,7 +477,7 @@ app.whenReady().then(async () => {
     const body = JSON.stringify({ index });
     await new Promise((resolve, reject) => {
       const req = http.request(
-        { host: '127.0.0.1', port, path: '/api/queue/skip-to', method: 'POST',
+        { host: SERVER_HOST, port, path: '/api/queue/skip-to', method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
         res => { res.resume(); res.on('end', resolve); }
       );

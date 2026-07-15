@@ -17,6 +17,15 @@ if (result.error) {
   console.log('[Server] .env loaded from', path.join(__dirname, '.env'));
 }
 
+// SEENS_* names are the public app configuration. Keep PORT/HOST as legacy
+// fallbacks so existing development and service configurations still work.
+// Publish the selected values through the legacy names before route modules are
+// loaded because OAuth and device-stream helpers read PORT during import.
+const PORT = parseInt(process.env.SEENS_PORT ?? process.env.PORT ?? '7477', 10);
+const HOST = process.env.SEENS_IP ?? process.env.HOST ?? '0.0.0.0';
+process.env.PORT = String(PORT);
+process.env.HOST = HOST;
+
 // Ensure required dirs exist before any module touches them.
 // In Electron, SEENS_DATA_DIR points to ~/Library/Application Support/seens-radio/
 const DATA_DIR    = process.env.SEENS_DATA_DIR ?? path.join(__dirname, 'data');
@@ -217,15 +226,13 @@ app.get('*', (req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.PORT ?? '7477');
-const HOST = process.env.HOST ?? '0.0.0.0';
 globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
   const server = app.listen(PORT, HOST, () => {
     const address = server.address();
     const actualPort = typeof address === 'object' && address ? address.port : PORT;
     globalThis.SEENS_SERVER_PORT = actualPort;
     process.env.PORT = String(actualPort);
-    console.log(`\n🎙  Seens Radio running at http://localhost:${actualPort}\n`);
+    console.log(`\n🎙  Seens Radio listening on ${HOST}:${actualPort}\n`);
 
     // Start the long-running AI agent subprocess — must be first so all
     // subsequent generate() calls route to the persistent session.

@@ -72,18 +72,29 @@ cp .env.example .env
 
 ## Configuration
 
-> **API keys can be set directly in the Settings panel inside the app.** The `.env` file is optional — use it to pre-configure keys before first launch, or to set options not exposed in the UI (like `PORT` or `AI_AGENT`).
+> **API keys can be set directly in the Settings panel inside the app.** The `.env` file is optional — use it to pre-configure keys before first launch, or to set options not exposed in the UI (like `SEENS_PORT`, `SEENS_IP`, or `AI_AGENT`).
 
 Open `.env` in any editor. The sections below explain each key.
 
 ### Server
 
 ```env
-PORT=7477
+SEENS_IP=0.0.0.0
+SEENS_PORT=7477
 NODE_ENV=development
 ```
 
-`PORT` is the local HTTP port. All OAuth redirect URIs must match this port when you register them with each provider.
+`SEENS_IP` is the listening address and `SEENS_PORT` is the HTTP port. They can be set in `.env` or exported from your terminal:
+
+```bash
+export SEENS_IP=127.0.0.1
+export SEENS_PORT=7477
+npm start
+```
+
+The defaults are `0.0.0.0` and `7477`. Terminal values take precedence in the Electron app, including exports loaded from the login shell when the packaged app is opened from Finder. The older `HOST` and `PORT` names remain supported as fallbacks.
+
+Restart the app after changing either value. All OAuth redirect URIs must match `SEENS_PORT`; binding to a non-loopback address makes the app available to other devices on that network.
 
 ---
 
@@ -151,7 +162,7 @@ Spotify is used for track metadata, artwork, and canonical song names. Music sti
 
 1. Go to **developer.spotify.com/dashboard** and log in.
 2. Click **Create app**.
-3. Set **Redirect URI** to `http://127.0.0.1:7477/callback/spotify` (must match `PORT`).
+3. Set **Redirect URI** to `http://127.0.0.1:7477/callback/spotify` (must match `SEENS_PORT`).
 4. Copy the **Client ID** (no secret needed — uses PKCE).
 
 ```env
@@ -242,7 +253,7 @@ APPLE_PRIVATE_KEY_PATH=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
 npm start
 ```
 
-Open **http://localhost:7477** in any browser.
+Open **http://localhost:7477** in any browser, or use the address and port configured through `SEENS_IP` and `SEENS_PORT`.
 
 ### Development (Electron desktop)
 
@@ -398,4 +409,4 @@ Check that your TTS provider key is set and valid. The server logs (terminal or 
 Run `claude --version` or `codex --version` to confirm the CLI is installed and logged in. The server logs will show the exact error from the subprocess.
 
 **Port already in use**
-Change `PORT=7477` to any free port in `.env`. Update all OAuth redirect URIs in each provider's dashboard to match.
+Change `SEENS_PORT=7477` to any free port in `.env` or your terminal environment, then restart the app. Update all OAuth redirect URIs in each provider's dashboard to match.
