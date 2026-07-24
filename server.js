@@ -237,7 +237,10 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
     // Start the long-running AI agent subprocess — must be first so all
     // subsequent generate() calls route to the persistent session.
     import('./src/ai/AgentClient.js').then(({ agent }) => {
-      agent.start().catch(err => console.error('[Server] AI agent failed to start:', err.message));
+      agent.start()
+        .then(() => agent.reset())
+        .then(() => console.log('[Server] AI conversation reset for fresh app session'))
+        .catch(err => console.error('[Server] AI agent failed to start:', err.message));
     });
 
     // Auto-spawn reranker subprocess if it was enabled in a previous session.

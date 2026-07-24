@@ -32,6 +32,7 @@ import path           from 'path';
 import os             from 'os';
 import readline       from 'readline';
 import { fileURLToPath } from 'url';
+import { codexFastModeArgs, codexReasoningArgs, codexReasoningEffort } from './codex-options.js';
 
 // ─── Agent memory directory (outside SEENS app) ──────────────────────────────
 
@@ -72,7 +73,7 @@ const CODEX_BIN    = process.env.CODEX_BIN    ?? 'codex';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5';
 // Default to a cheaper local Codex CLI model for this app.
 // Override via CODEX_MODEL env var if you need a different Codex-capable model.
-const CODEX_MODEL  = process.env.CODEX_MODEL  ?? 'gpt-5.4-mini';
+const CODEX_MODEL  = process.env.CODEX_MODEL  ?? 'gpt-5.6-sol';
 
 const START_TIME   = Date.now();
 
@@ -211,8 +212,8 @@ function parseClaude(raw) {
 
 const CODEX_JSON_INSTRUCTION =
   '\n\nRespond ONLY with a single JSON object (no markdown fences) matching:\n' +
-  '{"say":"","play":[{"title":"","artist":"","source":"spotify|apple|youtube|any"}],"reason":"","segue":""}\n' +
-  'Always populate say. pluginCall and pluginAction may be omitted.';
+  '{"say":"","play":[{"title":"","artist":"","source":"spotify|apple|youtube|any"}],"candidates":[],"playIntent":"now|next|end","reason":"","segue":"","sessionContext":null}\n' +
+  'Always populate say. candidates, sessionContext, pluginCall, and pluginAction may be omitted.';
 
 async function generateCodex(systemPrompt, userMessage, plugins) {
   // Build combined prompt: system context + JSON instruction + user message
@@ -233,6 +234,8 @@ async function generateCodex(systemPrompt, userMessage, plugins) {
     a.push('--skip-git-repo-check'); // cwd may not be in codex trusted list in packaged app
     a.push('--ignore-user-config');  // skip ~/.codex/config.toml MCP servers (seens_notify
                                      // has approval_mode=approve which triggers stdin read)
+    a.push(...codexReasoningArgs()); // DJ recommendations favor response latency by default
+    a.push(...codexFastModeArgs());  // Sol Fast is the authenticated low-latency service tier
     if (CODEX_MODEL) a.push('-m', CODEX_MODEL);
     return a;
   }
@@ -294,9 +297,11 @@ function normalizeResult(obj, raw) {
   return {
     say:          String(obj.say ?? ''),
     play:         Array.isArray(obj.play) ? obj.play.map(normalizeTrack) : [],
+    candidates:   Array.isArray(obj.candidates) ? obj.candidates.map(normalizeTrack) : [],
     reason:       String(obj.reason ?? ''),
     segue:        String(obj.segue ?? ''),
     playIntent:   obj.playIntent   ?? null,
+    sessionContext: obj.sessionContext ? String(obj.sessionContext) : null,
     pluginCall:   obj.pluginCall?.plugin ? obj.pluginCall   : null,
     pluginAction: obj.pluginAction?.type ? obj.pluginAction : null,
   };
@@ -466,6 +471,7 @@ async function main() {
     log(`Claude model: ${CLAUDE_MODEL}`);
   } else if (CODEX_MODEL) {
     log(`Codex model override: ${CODEX_MODEL}`);
+    log(`Codex reasoning effort: ${codexReasoningEffort()}`);
   }
 
   const rl = readline.createInterface({ input: process.stdin, terminal: false });

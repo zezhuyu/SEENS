@@ -9,7 +9,10 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getAccessToken } from '../auth/spotify-auth.js';
+import { getAuthenticatedClient } from '../auth/youtube-auth.js';
+import { google } from 'googleapis';
 import ytSearch from 'yt-search';
+import { startProgressiveResolution } from '../src/progressive-resolution.js';
 
 const execFileAsync = promisify(execFile);
 const YTDLP = process.env.YTDLP_BIN ?? '/opt/homebrew/bin/yt-dlp';
@@ -31,25 +34,38 @@ export async function resolveTracksOrdered(tracks) {
   return resolved;
 }
 
-async function resolveOne(track) {
+export function resolveTracksProgressively(tracks) {
+  return startProgressiveResolution(tracks, {
+    resolveFirst: track => resolveOne(track, { preferYouTubeApi: true }),
+    resolveRemaining: track => resolveOne(track),
+  });
+}
+
+async function resolveOne(track, { preferYouTubeApi = false } = {}) {
   // Plugin and connector tracks with a direct streamUrl — skip all lookups
   if ((track.source === 'plugin' || track.source?.startsWith('connector:')) && track.streamUrl) return track;
 
   let meta = { ...track };
 
-  // Step 1: Spotify metadata (artwork, canonical names, URI)
-  try {
-    meta = await resolveSpotifyMeta(track);
-  } catch (e) {
-    const detail = e.cause?.code ?? e.message;
-    console.warn(`[Resolver] Spotify: "${track.title}" — ${detail}`);
+  // The foreground track needs only a playable video ID. Spotify artwork and
+  // canonical metadata are useful for the rest of the queue but add a serial
+  // network round-trip before playback can begin.
+  if (!preferYouTubeApi) {
+    try {
+      meta = await resolveSpotifyMeta(track);
+    } catch (e) {
+      const detail = e.cause?.code ?? e.message;
+      console.warn(`[Resolver] Spotify: "${track.title}" — ${detail}`);
+    }
   }
 
   // Step 2: YouTube videoId via yt-search (no API key, no quota)
   try {
     const title  = meta.resolvedTitle  ?? track.title;
     const artist = meta.resolvedArtist ?? track.artist;
-    const videoId = await searchYouTube(title, artist);
+    const videoId = preferYouTubeApi
+      ? await searchYouTubeApi(title, artist).then(id => id ?? searchYouTube(title, artist))
+      : await searchYouTube(title, artist);
     if (videoId) {
       meta.videoId   = videoId;
       meta.streamUrl = `/api/stream/${videoId}`;
@@ -76,6 +92,30 @@ async function resolveOne(track) {
   }
 
   return meta;
+}
+
+async function searchYouTubeApi(title, artist) {
+  try {
+    const youtube = google.youtube({ version: 'v3', auth: getAuthenticatedClient() });
+    const { data } = await youtube.search.list({
+      part: ['snippet'],
+      q: `${artist} ${title} official audio`,
+      type: ['video'],
+      videoCategoryId: '10',
+      maxResults: 8,
+    });
+    const videos = (data.items ?? []).map(item => ({
+      videoId: item.id?.videoId,
+      title: item.snippet?.title ?? '',
+      author: { name: item.snippet?.channelTitle ?? '' },
+    })).filter(item => item.videoId);
+    const best = pickBestVideo(videos, title, artist);
+    if (best) console.log(`[Resolver] YouTube API "${title}" by "${artist}" → ${best}`);
+    return best;
+  } catch (err) {
+    console.warn(`[Resolver] YouTube API fast lookup failed for "${artist} — ${title}": ${err.message}`);
+    return null;
+  }
 }
 
 async function resolveSpotifyMeta(track) {
@@ -127,24 +167,12 @@ async function searchYouTube(title, artist) {
     `${title} ${artist}`,
   ];
 
-  const artistWds = artistWords(artist);
-
-  // Significant words from the track title (strip articles, short words)
-  const STOP = new Set(['the', 'and', 'for', 'feat', 'ft', 'vs', 'with', 'a', 'an', 'in', 'of', 'to']);
-  const titleWds = title.toLowerCase().split(/[\s\-–—()\[\]]+/).filter(w => w.length > 2 && !STOP.has(w));
-
-  const score = (v) => {
-    const hay = `${v.title} ${v.author?.name ?? ''}`.toLowerCase();
-    const artistHit = artistWds.length > 0 && artistWds.some(w => hay.includes(w));
-    const titleHit  = titleWds.length  > 0 && titleWds.some(w => hay.includes(w));
-    if (artistHit && titleHit) return 2;
-    if (artistHit)             return 1;
-    if (titleHit)              return 0;
-    return -1;
-  };
-
   let bestVideoId = null;
   let bestScore   = -2;
+  const artistWds = artistWords(artist);
+  const stop = new Set(['the', 'and', 'for', 'feat', 'ft', 'vs', 'with', 'a', 'an', 'in', 'of', 'to']);
+  const titleWds = title.toLowerCase().split(/[\s\-–—()\[\]]+/)
+    .filter(word => word.length > 2 && !stop.has(word));
 
   for (const q of queries) {
     try {
@@ -152,7 +180,7 @@ async function searchYouTube(title, artist) {
       const videos = result.videos?.filter(v => v.seconds > 60) ?? [];
       if (!videos.length) continue;
       for (const v of videos) {
-        const s = score(v);
+        const s = scoreVideo(v, title, artist);
         if (s > bestScore) {
           bestScore   = s;
           bestVideoId = v.videoId;
@@ -184,6 +212,33 @@ async function searchYouTube(title, artist) {
     console.warn(`[Resolver] yt no confident match for "${artist} — ${title}"`);
   }
   return bestVideoId;
+}
+
+function pickBestVideo(videos, title, artist) {
+  let best = null;
+  let bestScore = -2;
+  for (const video of videos) {
+    const score = scoreVideo(video, title, artist);
+    if (score > bestScore) {
+      best = video.videoId;
+      bestScore = score;
+    }
+  }
+  return bestScore === 2 ? best : null;
+}
+
+function scoreVideo(video, title, artist) {
+  const artistWds = artistWords(artist);
+  const stop = new Set(['the', 'and', 'for', 'feat', 'ft', 'vs', 'with', 'a', 'an', 'in', 'of', 'to']);
+  const titleWds = title.toLowerCase().split(/[\s\-–—()\[\]]+/)
+    .filter(word => word.length > 2 && !stop.has(word));
+  const hay = `${video.title} ${video.author?.name ?? ''}`.toLowerCase();
+  const artistHit = artistWds.length > 0 && artistWds.some(word => hay.includes(word));
+  const titleHit = titleWds.length > 0 && titleWds.some(word => hay.includes(word));
+  if (artistHit && titleHit) return 2;
+  if (artistHit) return 1;
+  if (titleHit) return 0;
+  return -1;
 }
 
 async function searchYtDlp(title, artist) {

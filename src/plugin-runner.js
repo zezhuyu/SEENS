@@ -286,10 +286,20 @@ export async function callPlugin(pluginName, endpointName, params = {}) {
 
 // ── System prompt context ─────────────────────────────────────────────────────
 
-export function pluginSystemContext() {
+export function pluginSystemContext({ compact = false } = {}) {
   const plugins = loadPlugins();
   const enabled = plugins.filter(p => p.enabled);
   if (!enabled.length) return null;
+
+  if (compact) {
+    return enabled.map(plugin => {
+      const endpointNames = Object.keys(plugin.endpoints ?? {});
+      const preferred = plugin.djEndpoints?.length
+        ? plugin.djEndpoints
+        : endpointNames.filter(name => !/^(health|status|settings|history_)/.test(name)).slice(0, 16);
+      return `${plugin.name}: ${plugin.description}\nEndpoints: ${preferred.join(', ')}`;
+    }).join('\n\n');
+  }
 
   const lines = [
     'You have access to external plugins listed below.',

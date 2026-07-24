@@ -1714,6 +1714,18 @@ function playNotificationSound() {
 }
 
 // ── SeensWidget ──────────────────────────────────────────────────────────────
+function getClientId() {
+  try {
+    const existing = sessionStorage.getItem('seens-client-id');
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    sessionStorage.setItem('seens-client-id', created);
+    return created;
+  } catch {
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
 function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, accent, volume, setVolume, restIntervalMin, setRestIntervalMin, restDurationMin, setRestDurationMin, categoryFilter, setCategoryFilter }) {
   // ── state
   const [now, setNow]                   = useState(new Date());
@@ -1776,6 +1788,8 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
   const transitionReqRef     = useRef(false);
   const waitForInteractRef   = useRef(false);
   const wsRef                = useRef(null);
+  const clientIdRef          = useRef(getClientId());
+  const activeRequestIdRef   = useRef(null);
   const reconnectDelayRef    = useRef(1000);
   const [notifications,    setNotifications]    = useState([]);
   const [unreadCount,      setUnreadCount]      = useState(0);
@@ -2402,7 +2416,11 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
       // Trigger transition generation at ~30s remaining
       if (!transitionReqRef.current && !pendingIntroTTSRef.current && remaining <= 30 && dur > 40) {
         transitionReqRef.current = true;
-        fetch('/api/transition', { method: 'POST' }).catch(() => {});
+        fetch('/api/transition', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId: clientIdRef.current }),
+        }).catch(() => {});
       }
       // Fire pending DJ intro at 8s remaining
       if (!introFiredRef.current && pendingIntroTTSRef.current && remaining <= 8 && dur > 15) {
@@ -2496,7 +2514,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
             // DJ introduced a new track — speak intro then switch
             coldStartTrackRef.current = msg.firstTrack;
             if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
-            else skipNextRef.current();
+            else if (!msg.ttsPending) skipNextRef.current();
           } else {
             // Conversational response (no new track) — just speak TTS, keep current song playing
             if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
@@ -2512,7 +2530,9 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
       } else {
         // cold start
         console.log('[handleDJResponse] cold-start path — ttsUrl:', msg.ttsUrl, 'firstTrack:', msg.firstTrack?.title ?? null);
-        if (msg.ttsUrl && msg.firstTrack) {
+        if (msg.ttsPending && msg.firstTrack) {
+          coldStartTrackRef.current = msg.firstTrack;
+        } else if (msg.ttsUrl && msg.firstTrack) {
           coldStartTrackRef.current = msg.firstTrack;
           enqueueTTS(msg.ttsUrl);
         } else if (msg.ttsUrl) {
@@ -2531,12 +2551,31 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
     let reconnect;
     const connect = () => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${location.host}/stream`);
+      const ws = new WebSocket(`${proto}://${location.host}/stream?clientId=${encodeURIComponent(clientIdRef.current)}`);
       wsRef.current = ws;
       ws.onopen = () => { setConnected(true); reconnectDelayRef.current = 1000; };
       ws.onmessage = (e) => {
         let msg; try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.requestId && msg.requestId !== activeRequestIdRef.current) return;
         if (msg.type === 'dj-response') handleDJResponse(msg);
+        else if (msg.type === 'dj-tts-ready' && startedRef.current) {
+          if (msg.ttsUrl) {
+            enqueueTTS(msg.ttsUrl);
+          } else if (coldStartTrackRef.current) {
+            coldStartTrackRef.current = null;
+            skipNextRef.current();
+          }
+        }
+        else if (msg.type === 'queue-prefilled') {
+          const tracks = msg.play ?? [];
+          const next = tracks[msg.playIntent === 'now' ? 1 : 0] ?? tracks[0];
+          if (next) {
+            setUpNextTrack({
+              title: next.resolvedTitle ?? next.title,
+              artist: next.resolvedArtist ?? next.artist ?? '',
+            });
+          }
+        }
         else if (msg.type === 'now-playing' && msg.track) setCurrentTrack(msg.track);
         else if (msg.type === 'command') {
           if (msg.action === 'pause') audioRef.current.pause();
@@ -2578,6 +2617,8 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
     setSessionStart(Date.now());
     userChatPendingRef.current = true; // expect a user-chat dj-response; block scheduler
     waitForInteractRef.current = false;
+    const requestId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    activeRequestIdRef.current = requestId;
 
     try {
       await fetch('/api/settings/queue/clear', { method: 'POST' });
@@ -2591,7 +2632,11 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
         const chatRes = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: 'Start my listening session. Tell me what you have planned and introduce the first track.' }),
+          body: JSON.stringify({
+            message: 'Start my listening session. Tell me what you have planned and introduce the first track.',
+            clientId: clientIdRef.current,
+            requestId,
+          }),
         });
         if (chatRes.status === 503) {
           const j = await chatRes.json().catch(() => ({}));
@@ -2619,11 +2664,13 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
     setDjMessages(prev => [...prev, { from:'user', text, time:fmtClock(new Date()) }]);
     setDjBusy(true);
     setDjText('...');
+    const requestId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    activeRequestIdRef.current = requestId;
     try {
       await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, clientId: clientIdRef.current, requestId }),
       });
       // response arrives via WS dj-response
     } catch {

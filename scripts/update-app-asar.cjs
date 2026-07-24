@@ -11,13 +11,17 @@
  * Usage: node scripts/update-app-asar.cjs
  */
 
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
 const fs   = require('fs');
 
 function md5(filePath) {
   return crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function md5Buffer(contents) {
+  return crypto.createHash('md5').update(contents).digest('hex');
 }
 
 const ROOT        = path.resolve(__dirname, '..');
@@ -138,6 +142,35 @@ asar.createPackageWithOptions(STAGE, OUTPUT, { unpack: '*.node' }).then(() => {
   // 6. Cleanup
   fs.rmSync(STAGE, { recursive: true, force: true });
   fs.rmSync(OUTPUT, { force: true });
+
+  // 7. Refuse to report success unless the installed archive contains the
+  //    exact latency-critical source that was just packed. This catches stale
+  //    or externally replaced app.asar files immediately.
+  const VERIFY_FILES = [
+    'server.js',
+    'src/router.js',
+    'src/ai/AgentProcess.js',
+    'src/scheduler.js',
+  ];
+  for (const relativePath of VERIFY_FILES) {
+    const source = fs.readFileSync(path.join(ROOT, relativePath));
+    const installed = asar.extractFile(ASAR, relativePath);
+    if (md5Buffer(source) !== md5Buffer(installed)) {
+      throw new Error(`Installed archive verification failed: ${relativePath}`);
+    }
+  }
+  console.log(`  Installed archive verified (${VERIFY_FILES.length} critical files)`);
+
+  // Re-sign after changing Resources/app.asar. Without this step macOS sees a
+  // modified, invalid bundle and another installer/launch path can replace it.
+  console.log('  Ad-hoc signing updated app...');
+  execFileSync(process.execPath, [path.join(ROOT, 'scripts/post-sign-macos-local.cjs'), APP], {
+    stdio: 'inherit',
+  });
+  execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', APP], {
+    stdio: 'inherit',
+  });
+  console.log('  App signature verified');
 
   console.log(`\n✅ Updated: ${ASAR}`);
   console.log('   Quit and reopen "Seens Radio" to load the new code.');

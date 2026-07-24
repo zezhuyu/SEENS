@@ -1,13 +1,15 @@
 import { generate, getActiveAgentName, isAgentActive, cancelCurrentCall } from './ai/index.js';
-import { rerank, findSimilar, recommend, isRerankerEnabled } from './reranker.js';
-import { buildSystemPrompt } from './context.js';
+import { rerank, findSimilar, getCachedPreferenceReference, recommend, isRerankerEnabled } from './reranker.js';
+import { buildFastSystemPrompt, buildSystemPrompt } from './context.js';
+import { buildCachedRerankerSessionWithFallback } from './fast-dj-prompt.js';
 import { synthesize } from './tts.js';
-import { addMessage, enqueue, enqueueNext, recordSuggestions, getPref, setPref, setSessionContext, setSessionStart, getRecentPlays, peekNext } from './state.js';
-import { broadcast } from './ws-broadcast.js';
-import { resolveTracksOrdered } from '../music/resolver.js';
+import { addMessage, enqueue, enqueueNext, hydrateQueuedTracks, recordSuggestions, getPref, setPref, setSessionContext, setSessionStart, getRecentPlays, getRecentCrossSessionSuggestions, getSessionSuggestions, peekNext } from './state.js';
+import { broadcast, deliver } from './ws-broadcast.js';
+import { resolveTracksOrdered, resolveTracksProgressively } from '../music/resolver.js';
 import { prewarmCache } from '../routes/stream-audio.js';
 import { callPlugin } from './plugin-runner.js';
-import { fetchTrackContext } from './track-context.js';
+import { appendWikipediaFact, fetchDirectTrackContext, fetchTrackContext } from './track-context.js';
+import { alignIntroToFirstTrack, getTtsDeliveryPolicy, shouldRewriteMusicIntro } from './intro-policy.js';
 
 // Truncate large text fields in plugin data before sending to the AI.
 // Full article bodies / transcripts can be thousands of tokens; summaries are enough.
@@ -40,7 +42,10 @@ let aiCallInFlight = false;
 let aiCallGeneration = 0;
 let currentTriggerType = null;
 
-export async function handleInput(input, triggerType = 'user-chat') {
+export async function handleInput(input, triggerType = 'user-chat', {
+  clientId = null,
+  requestId = null,
+} = {}) {
   const trimmed = input.trim();
 
   // Direct command — no AI needed
@@ -126,14 +131,67 @@ export async function handleInput(input, triggerType = 'user-chat') {
     console.log(`[Router:${triggerType}] similar-request — injecting active song into prompt: "${earlyActiveSong.title}"`);
   }
 
-  const systemPrompt = await buildSystemPrompt(triggerType, { agentMode: agentActive });
   const agentName = getActiveAgentName();
-  console.log(`[Router:${triggerType}] start → AI call (${agentName})`);
+  const useFastDjPath = agentName === 'codex' && (triggerType === 'user-chat' || triggerType === 'auto-refill');
+  const rerankerReference = useFastDjPath ? getCachedPreferenceReference(3) : [];
+  const systemPrompt = useFastDjPath
+    ? buildFastSystemPrompt(triggerType, {
+        rerankerReference,
+      })
+    : await buildSystemPrompt(triggerType, { agentMode: agentActive });
+  if (useFastDjPath) console.log(`[Router:${triggerType}] compact prompt: ${systemPrompt.length} chars; reranker reference: ${rerankerReference.length} tracks`);
+  console.log(`[Router:${triggerType}] start → recommendation path (${agentName})`);
 
   let djResponse;
+  const isTuneInRequest = triggerType === 'user-chat' && /^start my listening session\b/i.test(trimmed);
+  const isCachedRerankerRequest = isTuneInRequest || triggerType === 'auto-refill';
+  const cachedReference = isCachedRerankerRequest ? getCachedPreferenceReference(12) : [];
+  const blockedCachedTracks = isCachedRerankerRequest
+    ? [...getSessionSuggestions(), ...getRecentCrossSessionSuggestions(7, 50)]
+    : [];
+  let cachedSession = isCachedRerankerRequest
+    ? buildCachedRerankerSessionWithFallback(cachedReference, blockedCachedTracks, 8)
+    : null;
+  let cachedWikipediaContext = null;
+  if (cachedSession && isTuneInRequest) {
+    const wikiSelectionBudgetMs = Math.max(0, Number(process.env.DJ_WIKI_SELECTION_BUDGET_MS ?? 1600));
+    const contexts = await Promise.race([
+      Promise.all(cachedSession.play.map(track =>
+        fetchDirectTrackContext(track.title, track.artist ?? '').catch(() => null))),
+      new Promise(resolve => setTimeout(() => resolve([]), wikiSelectionBudgetMs)),
+    ]);
+    const contextualIndex = contexts.findIndex(Boolean);
+    if (contextualIndex >= 0) {
+      cachedWikipediaContext = contexts[contextualIndex];
+      if (contextualIndex > 0) {
+        const [contextualTrack] = cachedSession.play.splice(contextualIndex, 1);
+        cachedSession.play.unshift(contextualTrack);
+      }
+      cachedSession.play = cachedSession.play.slice(0, 5);
+      const first = cachedSession.play[0];
+      cachedSession.say = `Starting with ${first.title}${first.artist ? ` by ${first.artist}` : ''}, selected from your current preference profile.`;
+      console.log(`[Router:${triggerType}] ${ts()} Wikipedia-ready reranker pick — "${first.title}" by "${first.artist ?? ''}"`);
+    } else {
+      cachedSession.play = cachedSession.play.slice(0, 5);
+    }
+  }
+  if (cachedSession && triggerType === 'auto-refill') {
+    cachedSession = {
+      ...cachedSession,
+      say: '',
+      playIntent: 'end',
+      reason: 'Cached personalized reranker refill',
+    };
+  }
+  const usedCachedRerankerSession = !!cachedSession;
   try {
-    djResponse = await generate(systemPrompt, effectiveInput);
-    console.log(`[Router:${triggerType}] ${ts()} AI pass-1 done`);
+    if (cachedSession) {
+      djResponse = cachedSession;
+      console.log(`[Router:${triggerType}] ${ts()} cached reranker session ready — ${djResponse.play.length} tracks; AI call skipped`);
+    } else {
+      djResponse = await generate(systemPrompt, effectiveInput);
+      console.log(`[Router:${triggerType}] ${ts()} AI pass-1 done`);
+    }
     console.log(`[Router:${triggerType}]   tracks=${djResponse.play?.length ?? 0}  say="${djResponse.say?.slice(0, 100)}"`);
     console.log(`[Router:${triggerType}]   pluginCall=${JSON.stringify(djResponse.pluginCall ?? null)}`);
   } catch (err) {
@@ -155,7 +213,7 @@ export async function handleInput(input, triggerType = 'user-chat') {
     // Immediately broadcast the pass-1 "hold on" message so the user sees feedback right away.
     // Pass-2 result will arrive as a second dj-response once the plugin data is ready.
     if (djResponse.say) {
-      broadcast('dj-response', {
+      deliver('dj-response', {
         agent: agentName,
         say: djResponse.say,
         ttsUrl: null,
@@ -166,7 +224,8 @@ export async function handleInput(input, triggerType = 'user-chat') {
         playIntent: 'end',
         trigger: triggerType,
         interim: true,
-      });
+        requestId,
+      }, { clientId });
       console.log(`[Router:${triggerType}] ${ts()} interim pass-1 broadcast: "${djResponse.say.slice(0, 80)}"`);
     }
 
@@ -362,14 +421,18 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // Auto-refills queue tracks silently — TTS fires via the transition mechanism (pendingIntroTTS)
   // when the last current song is nearly done. Generating it here would race and steal the intro.
   const shouldSynthesize = !!djResponse.say && (hasTracks || chatSpeakOn) && !isAutoRefill;
+  const enrichMusicIntros = process.env.DJ_ENRICH_INTRO === '1';
+  const fastWikipedia = triggerType === 'user-chat';
 
   // ── Track context (Wikipedia) ────────────────────────────────────────────────
   // Kicked off immediately after the AI call so it runs in parallel with reranking
   // and resolution (~5-15s). By intro-generation time it's already done (<1s fetch).
   // Only for spoken intros; skip plugin tracks (they have their own audio/content).
   const _ctxSeed = djResponse.play?.[0];
-  const trackContextPromise = (shouldSynthesize && _ctxSeed && !djResponse.pluginCall?.plugin)
-    ? fetchTrackContext(_ctxSeed.title, _ctxSeed.artist ?? '').catch(() => null)
+  const trackContextPromise = ((fastWikipedia || enrichMusicIntros) && shouldSynthesize && _ctxSeed && !djResponse.pluginCall?.plugin)
+    ? (cachedWikipediaContext
+        ? Promise.resolve(cachedWikipediaContext)
+        : fetchTrackContext(_ctxSeed.title, _ctxSeed.artist ?? '').catch(() => null))
     : Promise.resolve(null);
 
   // Active song resolved early (before generate()) — reuse here with full camelCase shape.
@@ -395,7 +458,7 @@ export async function handleInput(input, triggerType = 'user-chat') {
     const fresh = extraCandidates.filter(t => !seen.has(`${t.title}___${t.artist ?? ''}`));
     rerankerPool = [...rerankerPool, ...fresh];
     console.log(`[Router:${triggerType}] ${ts()} reranker pool: ${rerankerPool.length} (${djResponse.play?.length ?? 0} play + ${fresh.length} candidates)`);
-  } else if (hasMusicCandidates && isRerankerEnabled()) {
+  } else if (hasMusicCandidates && isRerankerEnabled() && triggerType !== 'user-chat') {
     // Model returned no candidates — auto-expand the pool so the reranker has
     // enough songs to score. Run both DB sources in parallel (fast KNN lookups,
     // no model inference) and merge unique results.
@@ -471,7 +534,8 @@ export async function handleInput(input, triggerType = 'user-chat') {
   //   • Background auto-fill / DJ recommendation → always rerank (improves variety)
   //   • user-chat (any kind) → skip taste reranker; the DJ's picks and the
   //     findSimilar enrichment above already serve the user's explicit intent.
-  const shouldRerank = hasMusicCandidates && isRerankerEnabled() && triggerType !== 'user-chat';
+  const shouldRerank = hasMusicCandidates && isRerankerEnabled() &&
+    triggerType !== 'user-chat' && !usedCachedRerankerSession;
 
   // Reranker is optional. Give it a short foreground budget; if it is cold,
   // unavailable, crashed, or slow, keep the DJ-generated playlist/intro instead
@@ -503,10 +567,27 @@ export async function handleInput(input, triggerType = 'user-chat') {
       })
     : Promise.resolve(null);
 
-  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS + optional reranker in parallel${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
-  const [resolveResult, ttsResult, rerankResult] = await Promise.allSettled([
-    hasTracks ? resolveTracksOrdered(djResponse.play) : Promise.resolve([]),
-    shouldSynthesize ? synthesize(djResponse.say) : Promise.resolve(null),
+  const progressiveResolution = (triggerType === 'user-chat' || usedCachedRerankerSession) && hasMusicCandidates
+    ? resolveTracksProgressively(djResponse.play)
+    : null;
+  const resolvePromise = progressiveResolution
+    ? progressiveResolution.first.then(track => track ? [track] : [])
+    : (hasTracks ? resolveTracksOrdered(djResponse.play) : Promise.resolve([]));
+
+  const ttsDelivery = getTtsDeliveryPolicy(triggerType, shouldSynthesize);
+  const deferUserTts = ttsDelivery.deferred;
+  let ttsResult = { status: deferUserTts ? 'deferred' : 'pending', value: null };
+  const ttsPromise = shouldSynthesize && !deferUserTts
+    ? synthesize(djResponse.say)
+    : Promise.resolve(null);
+  ttsPromise.then(
+    value => { ttsResult = { status: 'fulfilled', value }; },
+    reason => { ttsResult = { status: 'rejected', reason }; },
+  );
+
+  console.log(`[Router:${triggerType}] ${ts()} starting resolve + TTS + optional reranker in parallel${progressiveResolution ? ' (first track foreground; queue background)' : ''}${!shouldSynthesize ? ' (TTS skipped — text-only Q&A)' : ''}`);
+  const [resolveResult, rerankResult] = await Promise.allSettled([
+    resolvePromise,
     optionalRerank,
   ]);
 
@@ -704,9 +785,31 @@ export async function handleInput(input, triggerType = 'user-chat') {
     }
     resolvedTracks = resolvedRaw;
     try {
-      addToQueue(resolvedTracks);
-      console.log(`[Router:${triggerType}] ${ts()} resolve done — ${resolvedTracks.length}/${djResponse.play?.length ?? 0} tracks (intent=${intent})`);
+      const queuedTracks = progressiveResolution
+        ? [...resolvedTracks, ...(djResponse.play ?? []).slice(resolvedTracks.length)]
+        : resolvedTracks;
+      addToQueue(queuedTracks);
+      console.log(`[Router:${triggerType}] ${ts()} ${progressiveResolution ? 'first resolve' : 'resolve'} done — ${resolvedTracks.length}/${djResponse.play?.length ?? 0} tracks foreground (intent=${intent})`);
+      if (progressiveResolution) {
+        deliver('queue-prefilled', {
+          play: queuedTracks,
+          firstTrack: resolvedTracks[0] ?? null,
+          playIntent: intent,
+          trigger: triggerType,
+          requestId,
+        }, { clientId });
+      }
       prewarmCache(resolvedTracks.map(t => t.videoId));
+      if (progressiveResolution) {
+        progressiveResolution.all.then(allTracks => {
+          const remaining = allTracks.slice(1).filter(Boolean);
+          hydrateQueuedTracks(remaining);
+          prewarmCache(remaining.map(track => track.videoId));
+          console.log(`[Router:${triggerType}] ${ts()} background resolve done — ${remaining.length}/${Math.max(0, (djResponse.play?.length ?? 1) - 1)} remaining tracks hydrated`);
+        }).catch(err => {
+          console.warn(`[Router:${triggerType}] background resolve failed:`, err.message);
+        });
+      }
     } catch (err) {
       console.warn(`[Router:${triggerType}] ${ts()} enqueue failed:`, err.message);
     }
@@ -720,7 +823,8 @@ export async function handleInput(input, triggerType = 'user-chat') {
   // will keep generating the same candidate pool session after session.
   // Use resolved titles when available (more canonical); fall back to the raw AI suggestion.
   const tracksToRecord = [
-    ...(resolvedTracks.length > 0 ? resolvedTracks : (djResponse.play ?? [])),
+    ...(progressiveResolution ? (djResponse.play ?? []) :
+      (resolvedTracks.length > 0 ? resolvedTracks : (djResponse.play ?? []))),
     ...(djResponse.candidates ?? []),
   ];
   try { recordSuggestions(tracksToRecord); } catch (err) {
@@ -756,11 +860,21 @@ export async function handleInput(input, triggerType = 'user-chat') {
     (resolvedTracks[0] && firstPlayable && firstPlayable !== resolvedTracks[0]);
 
   // Await the Wikipedia fetch (started in parallel with reranking — should already be done)
-  const trackContext = await trackContextPromise;
+  const wikiBudgetMs = Math.max(0, Number(process.env.DJ_WIKI_BUDGET_MS ?? 900));
+  const trackContext = fastWikipedia
+    ? await Promise.race([
+        trackContextPromise,
+        new Promise(resolve => setTimeout(() => resolve(null), wikiBudgetMs)),
+      ])
+    : await trackContextPromise;
   if (trackContext) console.log(`[Router:${triggerType}] ${ts()} track context ready (${trackContext.length} chars)`);
 
-  const needsIntroRewrite = firstTrack?.source !== 'plugin' && introPlaylist.length > 0 &&
-    (playlistChangedAfterDjDraft || !!trackContext);
+  const needsIntroRewrite = shouldRewriteMusicIntro({
+    firstTrack,
+    playlistLength: introPlaylist.length,
+    playlistChanged: playlistChangedAfterDjDraft,
+    trackContext,
+  });
 
   if (needsIntroRewrite) {
     const trackContextSection = trackContext
@@ -812,33 +926,30 @@ export async function handleInput(input, triggerType = 'user-chat') {
     }
   }
 
+  // Default fast path: use the exact Wikipedia response without another model
+  // round-trip. The optional DJ_ENRICH_INTRO mode above keeps the authored rewrite.
+  if (fastWikipedia && trackContext && !enrichMusicIntros) {
+    const enriched = appendWikipediaFact(finalSay, trackContext);
+    if (enriched.changed) {
+      finalSay = enriched.say;
+      finalSayChanged = true;
+      console.log(`[Router:${triggerType}] ${ts()} Wikipedia fact appended without AI pass-2`);
+    }
+  }
+
   // Safety net: if the generated intro still does not name the actual first
   // playable track, replace it with a deterministic one-track intro rather than
   // allowing stale TTS/text to announce a different song.
   // Run unconditionally (not just when playlistChangedAfterDjDraft) — catches mismatches
   // from any cause: reranking, skips, queue refresh, AI hallucination.
-  if (firstTrack && finalSay && firstTrack.source !== 'plugin') {
-    const title  = (firstTrack.resolvedTitle  ?? firstTrack.title  ?? '').toLowerCase();
-    const artist = (firstTrack.resolvedArtist ?? firstTrack.artist ?? '').toLowerCase();
-    const sayLower = finalSay.toLowerCase();
-    // Use words > 2 chars (catches short titles like "Us", "It", "OK")
-    const titleWords  = title.split(/\s+/).filter(w => w.length > 2);
-    const artistWords = artist.split(/\s+/).filter(w => w.length > 2);
-    const titleMentioned  = titleWords.length  === 0 || titleWords.some(w => sayLower.includes(w));
-    const artistMentioned = artistWords.length === 0 || artistWords.some(w => sayLower.includes(w));
-    const titleMissing = !titleMentioned && !artistMentioned;
-    if (titleMissing) {
-      const displayTitle  = firstTrack.resolvedTitle  ?? firstTrack.title;
-      const displayArtist = firstTrack.resolvedArtist ?? firstTrack.artist ?? '';
-      finalSay = displayArtist
-        ? `First up is ${displayTitle} by ${displayArtist}.`
-        : `First up is ${displayTitle}.`;
-      finalSayChanged = true;
-      console.log(`[Router:${triggerType}] ${ts()} say/firstTrack mismatch — fallback intro: "${finalSay}"`);
-    }
+  const alignedIntro = alignIntroToFirstTrack(finalSay, firstTrack);
+  if (alignedIntro.changed) {
+    finalSay = alignedIntro.say;
+    finalSayChanged = true;
+    console.log(`[Router:${triggerType}] ${ts()} say/firstTrack mismatch — fallback intro: "${finalSay}"`);
   }
 
-  if (finalSayChanged && shouldSynthesize) {
+  if (finalSayChanged && shouldSynthesize && !deferUserTts) {
     const corrected = await synthesize(finalSay).catch(err => {
       console.warn(`[Router:${triggerType}] TTS re-synth error:`, err.message);
       return null;
@@ -872,7 +983,7 @@ export async function handleInput(input, triggerType = 'user-chat') {
 
   console.log(`[Router:${triggerType}] ${ts()} broadcasting — firstTrack="${firstTrack?.resolvedTitle ?? firstTrack?.title ?? 'none'}" videoId=${firstTrack?.videoId ?? 'null'}`);
 
-  broadcast('dj-response', {
+  deliver('dj-response', {
     agent: agentName,
     say: finalSay,
     ttsUrl,
@@ -882,7 +993,38 @@ export async function handleInput(input, triggerType = 'user-chat') {
     segue: djResponse.segue,
     playIntent: intent,
     trigger: triggerType,   // client uses this to decide immediate vs near-end playback
-  });
+    ttsPending: ttsDelivery.pending,
+    requestId,
+  }, { clientId });
+
+  if (deferUserTts && shouldSynthesize) {
+    synthesize(finalSay).then(result => {
+      console.log(`[Router:${triggerType}] ${ts()} deferred final TTS done → ${result?.url ?? 'null'}`);
+      deliver('dj-tts-ready', {
+        ttsUrl: result?.url ?? null,
+        trigger: triggerType,
+        requestId,
+      }, { clientId });
+    }).catch(err => {
+      console.warn(`[Router:${triggerType}] deferred final TTS failed:`, err.message);
+      deliver('dj-tts-ready', { ttsUrl: null, trigger: triggerType, requestId }, { clientId });
+    });
+  }
+
+  // TTS is presentation, not a prerequisite for returning a playable song.
+  // If it is still rendering, deliver it as a follow-up event without holding
+  // the recommendation API or first-track playback open.
+  if (!deferUserTts && !ttsUrl && !finalSayChanged && shouldSynthesize && ttsResult.status === 'pending') {
+    ttsPromise.then(result => {
+      if (!result?.url) return;
+      console.log(`[Router:${triggerType}] ${ts()} deferred TTS done → ${result.url}`);
+      deliver('dj-tts-ready', {
+        ttsUrl: result.url,
+        trigger: triggerType,
+        requestId,
+      }, { clientId });
+    }).catch(err => console.warn(`[Router:${triggerType}] deferred TTS failed:`, err.message));
+  }
 
   return { djResponse, resolvedTracks, ttsUrl, agent: agentName };
 

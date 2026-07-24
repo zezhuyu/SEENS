@@ -6,6 +6,7 @@ import { getWeatherContext } from './weather.js';
 import { getLocation } from './location.js';
 import { readUserFile, readUserJSON } from './paths.js';
 import { pluginSystemContext } from './plugin-runner.js';
+import { composeFastDjPrompt } from './fast-dj-prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -228,6 +229,63 @@ export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode =
   ].filter(Boolean).join('\n\n---\n\n');
 }
 
+export function buildFastSystemPrompt(triggerType = 'user-chat', { rerankerReference = [] } = {}) {
+  const taste = readUserFile('taste.md');
+  const routines = readUserFile('routines.md');
+  const moodRules = readUserFile('mood-rules.md');
+  const artistFeedback = getArtistFeedback();
+  const topArtists = buildTopArtistsContext(readUserJSON('top-artists.json'));
+  const library = buildCompactLibraryContext(readUserJSON('playlists.json'), artistFeedback);
+  const recentPlays = getRecentPlays(5);
+  const queued = getQueueTracks().slice(0, 5);
+  const nowPlaying = recentPlays[0] ?? queued[0] ?? null;
+  const blocked = new Map();
+  const blockKey = track => `${track.title?.toLowerCase()}|||${(track.artist ?? '').toLowerCase()}`;
+  for (const track of [...getSessionSuggestions(), ...getRecentCrossSessionSuggestions(7, 50)]) {
+    if (track?.title && !blocked.has(blockKey(track))) blocked.set(blockKey(track), track);
+  }
+
+  const feedback = [
+    ...artistFeedback.filter(item => item.likes > 0).slice(0, 8)
+      .map(item => `Likes ${item.artist}`),
+    ...artistFeedback.filter(item => item.dislikes > 0 && item.likes === 0).slice(0, 8)
+      .map(item => `Avoid ${item.artist}`),
+    ...getRecentSkips(10).map(item => `Skipped "${item.title}" by ${item.artist ?? 'unknown'}`),
+  ].join('\n');
+
+  const now = new Date();
+  const { seed, lens } = getSessionMood();
+  const environment = [
+    now.toLocaleString('en-US', { weekday: 'long', hour: '2-digit', minute: '2-digit' }),
+    getSeason(now),
+    `trigger=${triggerType}`,
+    `session mood=${seed}; ${lens}`,
+    `energy=${getPref('mood.energy', 'auto')}`,
+  ].join('; ');
+
+  return composeFastDjPrompt({
+    taste,
+    routines,
+    moodRules,
+    topArtists,
+    library,
+    environment,
+    sessionContext: getSessionContext(),
+    nowPlaying: nowPlaying
+      ? `"${nowPlaying.resolvedTitle ?? nowPlaying.title}" by ${nowPlaying.resolvedArtist ?? nowPlaying.artist ?? 'unknown'}`
+      : '',
+    upNext: queued.map((track, index) =>
+      `${index + 1}. "${track.title}" by ${track.artist ?? 'unknown'}`).join('\n'),
+    blockedTracks: [...blocked.values()].map(track =>
+      `- "${track.title}" by ${track.artist ?? 'unknown'}`),
+    feedback,
+    rerankerReference: rerankerReference
+      .map((track, index) => `${index + 1}. "${track.title}" by ${track.artist ?? 'unknown'}`)
+      .join('\n'),
+    plugins: pluginSystemContext({ compact: true }),
+  });
+}
+
 function getSeason(date) {
   const m = date.getMonth() + 1;
   if (m >= 3 && m <= 5) return 'Spring';
@@ -276,6 +334,24 @@ function buildLibraryContext(playlists, artistFeedback = []) {
     `(sorted by preference — liked artists shown first with [N liked] tags):\n` +
     lines.join('\n')
   );
+}
+
+function buildCompactLibraryContext(playlists, artistFeedback = []) {
+  if (!Array.isArray(playlists) || !playlists.length) return '';
+  const likes = new Map(artistFeedback.map(item => [item.artist.toLowerCase(), item.likes ?? 0]));
+  const byArtist = new Map();
+  for (const track of playlists) {
+    if (!track.artist?.trim() || !track.title?.trim()) continue;
+    if (!byArtist.has(track.artist)) byArtist.set(track.artist, []);
+    byArtist.get(track.artist).push(track.title);
+  }
+  return [...byArtist.entries()]
+    .sort(([artistA, tracksA], [artistB, tracksB]) =>
+      (likes.get(artistB.toLowerCase()) ?? 0) - (likes.get(artistA.toLowerCase()) ?? 0) ||
+      tracksB.length - tracksA.length)
+    .slice(0, 20)
+    .map(([artist, tracks]) => `${artist}: ${tracks.slice(0, 3).join(', ')}`)
+    .join('\n');
 }
 
 // Formats the user's Spotify top-artist list (rank = listening frequency order from Spotify).

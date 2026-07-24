@@ -3,12 +3,13 @@ import { peekNext, addMessage } from '../src/state.js';
 import { generate } from '../src/ai/index.js';
 import { buildSystemPrompt } from '../src/context.js';
 import { synthesize } from '../src/tts.js';
-import { broadcast } from '../src/ws-broadcast.js';
+import { deliver } from '../src/ws-broadcast.js';
 
 const router = express.Router();
 let transitioning = false;
 
 router.post('/', async (req, res) => {
+  const { clientId = null } = req.body ?? {};
   res.json({ ok: true }); // respond immediately, work async
 
   if (transitioning) return;
@@ -46,14 +47,14 @@ router.post('/', async (req, res) => {
       return null;
     });
 
-    broadcast('dj-response', {
+    deliver('dj-response', {
       say,
       ttsUrl: ttsResult?.url ?? null,
       trigger: 'transition',
       playIntent: 'end',
       firstTrack: null,
       play: [],
-    });
+    }, { clientId });
 
     console.log(`[Transition] done — ttsUrl=${ttsResult?.url ?? 'null'}`);
   } catch (err) {

@@ -7,6 +7,7 @@ import { spawn, execSync } from 'child_process';
 import { homedir }         from 'os';
 import { mkdirSync, existsSync } from 'fs';
 import { join }            from 'path';
+import { codexFastModeArgs, codexReasoningArgs } from './codex-options.js';
 
 // Codex requires cwd to be a git repo for workspace-write sandbox.
 // In read-only sandbox it reads stdin before responding (blocking).
@@ -23,7 +24,7 @@ if (!existsSync(join(CODEX_WORKSPACE, '.git'))) {
 const CODEX_BIN   = process.env.CODEX_BIN   ?? 'codex';
 // Default to a cheaper local Codex CLI model for this app.
 // Override via CODEX_MODEL env var if you need a different Codex-capable model.
-const CODEX_MODEL = process.env.CODEX_MODEL ?? 'gpt-5.4-mini';
+const CODEX_MODEL = process.env.CODEX_MODEL ?? 'gpt-5.6-sol';
 
 let currentProc = null;
 
@@ -63,6 +64,7 @@ export async function generate(systemPrompt, userMessage) {
   // --skip-git-repo-check: CODEX_WORKSPACE is a fresh git repo, may not be in trust list.
   const args = ['exec', fullPrompt, '--json', '--full-auto', '--skip-git-repo-check',
                 '--ignore-user-config'];  // skip ~/.codex/config.toml MCP servers (approval prompts)
+  args.push(...codexReasoningArgs(), ...codexFastModeArgs());
   if (CODEX_MODEL) args.push('-m', CODEX_MODEL);
 
   const jsonl = await runCLI(CODEX_BIN, args);

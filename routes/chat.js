@@ -4,11 +4,11 @@ import { handleInput } from '../src/router.js';
 const router = express.Router();
 
 router.post('/', async (req, res) => {
-  const { message } = req.body;
+  const { message, clientId, requestId } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: 'message required' });
 
   try {
-    const result = await handleInput(message);
+    const result = await handleInput(message, 'user-chat', { clientId, requestId });
     if (result.error) return res.status(503).json({ error: result.error, retry: true });
     res.json(result);
   } catch (err) {

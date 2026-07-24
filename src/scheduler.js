@@ -248,15 +248,19 @@ export async function startScheduler() {
     console.log(`[Scheduler] Started ${FALLBACK_SESSIONS.length} fallback sessions`);
   }
 
-  // Regenerate from routines in background (doesn't block startup).
-  generateScheduleFromRoutines()
-    .then(sessions => {
-      if (sessions) {
-        _scheduleAll(sessions);
-        console.log(`[Scheduler] Schedule updated from routines — ${sessions.length} sessions active`);
-      }
-    })
-    .catch(err => console.warn('[Scheduler] Background schedule generation error:', err.message));
+  // A cached schedule is already usable and remains active until the explicit
+  // regenerate endpoint is called. Avoid launching a competing AI process during
+  // the user's latency-sensitive first recommendation after app startup.
+  if (!existing) {
+    generateScheduleFromRoutines()
+      .then(sessions => {
+        if (sessions) {
+          _scheduleAll(sessions);
+          console.log(`[Scheduler] Schedule updated from routines — ${sessions.length} sessions active`);
+        }
+      })
+      .catch(err => console.warn('[Scheduler] Background schedule generation error:', err.message));
+  }
 }
 
 /**

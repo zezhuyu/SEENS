@@ -265,7 +265,7 @@ export class RadioPlayer {
           this._skipAfterTTS = true;
         }
         if (msg.ttsUrl) this.enqueueTTS(msg.ttsUrl);
-        else this.skipNext();
+        else if (!msg.ttsPending) this.skipNext();
       } else if (intent === 'next') {
         // Don't jump in: hold the DJ intro until near end of current track, update up-next
         log('DJ', 'user request next: queuing intro for end of current track');
@@ -286,7 +286,10 @@ export class RadioPlayer {
       }
     } else {
       // Nothing playing — DJ speaks first, then music starts
-      if (msg.ttsUrl && msg.firstTrack) {
+      if (msg.ttsPending && msg.firstTrack) {
+        log('DJ', 'cold start: waiting for deferred TTS');
+        this._coldStartTrack = msg.firstTrack;
+      } else if (msg.ttsUrl && msg.firstTrack) {
         log('DJ', 'cold start: TTS first, then track');
         this._coldStartTrack = msg.firstTrack;
         this.enqueueTTS(msg.ttsUrl);
@@ -309,6 +312,29 @@ export class RadioPlayer {
     }
 
     setTimeout(() => this.$('dj-dot').classList.remove('pulsing'), 3000);
+  }
+
+  onDJTTSReady(msg) {
+    if (!this.started) return;
+    if (msg.ttsUrl) {
+      this.enqueueTTS(msg.ttsUrl);
+    } else if (this._coldStartTrack) {
+      const track = this._coldStartTrack;
+      this._coldStartTrack = null;
+      fetch('/api/next', { method: 'POST' })
+        .then(r => r.json())
+        .then(({ upNext }) => this.updateUpNext(upNext))
+        .catch(() => {});
+      this.playTrack(track);
+    }
+  }
+
+  onQueuePrefilled(msg) {
+    const tracks = msg.play ?? [];
+    const next = tracks[msg.playIntent === 'now' ? 1 : 0] ?? tracks[0];
+    if (!next) return;
+    this.$('up-next-text').textContent =
+      `${next.resolvedTitle ?? next.title} — ${next.resolvedArtist ?? next.artist ?? ''}`;
   }
 
   // Show a tap-to-play prompt if browser blocks autoplay
@@ -405,7 +431,11 @@ export class RadioPlayer {
       this.transitionRequested = true;
       const log = window.dbg ?? console.log;
       log('DJ', `requesting transition at ${remaining.toFixed(0)}s remaining`);
-      fetch('/api/transition', { method: 'POST' }).catch(() => {});
+      fetch('/api/transition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: window.__seensClientId }),
+      }).catch(() => {});
     }
 
     // Fire pending DJ intro when 8 seconds remain in the current track
@@ -454,11 +484,12 @@ export class RadioPlayer {
     input.value = '';
     this.$('dj-text').textContent = '...';
     this.$('dj-dot').classList.add('pulsing');
+    const requestId = window.__seensNewRequestId?.();
     try {
       await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, clientId: window.__seensClientId, requestId }),
       });
     } catch {
       this.$('dj-text').textContent = 'Connection error — is the server running?';

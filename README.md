@@ -104,7 +104,13 @@ Restart the app after changing either value. All OAuth redirect URIs must match 
 AI_AGENT=claude          # or: codex
 ```
 
-When `AI_AGENT=codex`, the app defaults the Codex CLI model to `gpt-5.4-mini` to save tokens. Override it with `CODEX_MODEL=...` if you want a different Codex-capable model.
+When `AI_AGENT=codex`, the app defaults to `gpt-5.6-sol` Fast with low reasoning effort so music starts sooner. Fast mode uses more ChatGPT credits; set `CODEX_FAST_MODE=0` to disable it. Override the model or reasoning with `CODEX_MODEL=...` and `CODEX_REASONING_EFFORT=medium` (or `high`/`xhigh`) if you prefer deeper reasoning over response speed.
+
+The low-latency DJ prompt includes a cached personalized reference from the reranker. After the first track is selected, Wikipedia lookup runs alongside media resolution with a 900ms foreground budget and adds a sourced fact without a second AI call. Override the budget with `DJ_WIKI_BUDGET_MS`.
+
+Tune In uses the cached reranker session directly when at least three fresh personalized tracks are available, avoiding a model call on the initial playback path. Free-form chat still uses Codex with the compact reranker reference.
+
+The optional Wikipedia-backed intro rewrite is off by default because it requires a second AI call after songs resolve. Set `DJ_ENRICH_INTRO=1` to restore those researched 2-3 sentence intros; the fast default still verifies that the spoken intro names the actual first track.
 
 No API key needed here — the agent runs through the CLI you installed above. If you want to use the Codex adapter with a direct OpenAI API key instead of the `codex` CLI:
 

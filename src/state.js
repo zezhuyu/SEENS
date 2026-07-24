@@ -229,6 +229,32 @@ export function enqueueNext(tracks) {
   for (const t of tracks) insertTrack(insert, pos++, t);
 }
 
+export function hydrateQueuedTracks(tracks) {
+  const update = db.prepare(`
+    UPDATE queue SET
+      track_id = ?, source = ?, title = ?, artist = ?, uri = ?, video_id = ?,
+      stream_url = ?, preview_url = ?, artwork_url = ?, resolved_title = ?, resolved_artist = ?
+    WHERE lower(title) = lower(?) AND lower(COALESCE(artist, '')) = lower(?)
+  `);
+  for (const track of tracks) {
+    update.run(
+      track.id ?? null,
+      track.source ?? 'any',
+      track.resolvedTitle ?? track.title,
+      track.resolvedArtist ?? track.artist ?? null,
+      track.uri ?? null,
+      track.videoId ?? null,
+      track.streamUrl ?? null,
+      track.previewUrl ?? null,
+      track.artworkUrl ?? null,
+      track.resolvedTitle ?? null,
+      track.resolvedArtist ?? null,
+      track.title,
+      track.artist ?? '',
+    );
+  }
+}
+
 export function dequeue() {
   const row = db.prepare('SELECT * FROM queue ORDER BY position ASC LIMIT 1').get();
   if (!row) return null;

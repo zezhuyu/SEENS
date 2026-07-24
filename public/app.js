@@ -2,6 +2,24 @@ import { RadioPlayer } from './components/radio-player.js';
 import { RadioProfile } from './components/radio-profile.js';
 import { RadioSettings } from './components/radio-settings.js';
 
+const CLIENT_ID = (() => {
+  try {
+    const existing = sessionStorage.getItem('seens-client-id');
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    sessionStorage.setItem('seens-client-id', created);
+    return created;
+  } catch {
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+})();
+window.__seensClientId = CLIENT_ID;
+let activeRequestId = null;
+window.__seensNewRequestId = function newRequestId() {
+  activeRequestId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return activeRequestId;
+};
+
 // ─── Debug logger (press D to toggle panel) ───────────────────────────────────
 const debugPanel = document.getElementById('debug-panel');
 window.dbg = function dbg(label, data) {
@@ -41,7 +59,7 @@ let ws, reconnectDelay = 1000;
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/stream`);
+  ws = new WebSocket(`${proto}://${location.host}/stream?clientId=${encodeURIComponent(CLIENT_ID)}`);
 
   ws.addEventListener('open', () => {
     reconnectDelay = 1000;
@@ -66,8 +84,11 @@ function connectWS() {
 }
 
 function handleWS(msg) {
+  if (msg.requestId && msg.requestId !== activeRequestId) return;
   switch (msg.type) {
     case 'dj-response':  player.onDJResponse(msg); break;
+    case 'dj-tts-ready': player.onDJTTSReady(msg); break;
+    case 'queue-prefilled': player.onQueuePrefilled(msg); break;
     case 'now-playing':  player.onNowPlaying(msg.track); break;
     case 'command':      player.onCommand(msg.action); break;
   }
@@ -90,6 +111,7 @@ document.getElementById('start-btn').addEventListener('click', async () => {
   // Unlock browser autoplay + allow the player to respond to WS messages
   player.waitingForInteraction = false;
   player.started = true;
+  const requestId = window.__seensNewRequestId();
 
   try {
     // Clear stale queue so we always get a fresh plan, not leftovers from last session
@@ -98,7 +120,11 @@ document.getElementById('start-btn').addEventListener('click', async () => {
     await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: "Start my listening session. Tell me what you have planned and introduce the first track." }),
+      body: JSON.stringify({
+        message: "Start my listening session. Tell me what you have planned and introduce the first track.",
+        clientId: CLIENT_ID,
+        requestId,
+      }),
     });
     // dj-response arrives via WS → overlay dismissed → DJ speaks → music plays
   } catch {

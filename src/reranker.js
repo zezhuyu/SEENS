@@ -58,6 +58,13 @@ let _warmupPromise = null;        // resolves true (ready) or false (failed) onc
 let _restartTimer  = null;        // debounce handle for auto-restart
 let _stopRequested = false;       // suppress restart when disableReranker() intentionally stops it
 let _restartAttempts = 0;         // bounded crash-loop protection
+let _preferenceReference = (() => {
+  try {
+    const cached = JSON.parse(getPref('reranker.preference_reference', '[]'));
+    return Array.isArray(cached) ? cached : [];
+  } catch { return []; }
+})();
+let _preferenceRefreshInFlight = null;
 
 export function isRerankerInstalled() {
   try { return !!_launchTarget(); } catch { return false; }
@@ -231,6 +238,7 @@ function _warmup() {
       const loaded = Object.values(h?.models_loaded ?? {}).filter(Boolean).length;
       _restartAttempts = 0;
       console.log(`[Reranker] warm-up done — ${loaded} model(s) ready`);
+      refreshPreferenceReference().catch(() => {});
       return true;
     })
     .catch(err => { console.warn('[Reranker] warm-up failed (non-fatal):', err.message); return false; });
@@ -435,6 +443,35 @@ export async function recommend(limit = 10) {
   }
 }
 
+/**
+ * Return the last personalized reranker recommendations synchronously so the
+ * latency-sensitive DJ prompt never waits for model inference.
+ */
+export function getCachedPreferenceReference(limit = 8) {
+  if (!isRerankerEnabled()) return [];
+  return _preferenceReference.slice(0, limit);
+}
+
+export function refreshPreferenceReference(limit = 12) {
+  if (!isRerankerEnabled() || !isSubprocessRunning()) return Promise.resolve([]);
+  if (_preferenceRefreshInFlight) return _preferenceRefreshInFlight;
+  _preferenceRefreshInFlight = recommend(limit)
+    .then(songs => {
+      if (songs?.length) {
+        _preferenceReference = songs;
+        setPref('reranker.preference_reference', JSON.stringify(songs));
+        console.log(`[Reranker] preference reference refreshed — ${songs.length} tracks cached`);
+      }
+      return _preferenceReference;
+    })
+    .catch(err => {
+      console.warn('[Reranker] preference reference refresh failed:', err.message);
+      return _preferenceReference;
+    })
+    .finally(() => { _preferenceRefreshInFlight = null; });
+  return _preferenceRefreshInFlight;
+}
+
 // ─── Feedback (fire-and-forget) ───────────────────────────────────────────────
 
 export async function getSeedProgress() {
@@ -454,7 +491,9 @@ export function sendFeedback(track, event, context = null) {
   if (!isRerankerEnabled()) return;
   const song_id = canonicalSongId(track);
   if (isSubprocessRunning()) {
-    _call('feedback', { song_id, event, context }, 3_000).catch(() => {});
+    _call('feedback', { song_id, event, context }, 3_000)
+      .then(() => refreshPreferenceReference().catch(() => {}))
+      .catch(() => {});
     return;
   }
   fetch(`${RERANKER_URL}/api/feedback`, {
