@@ -1,3 +1,5 @@
+
+
 # Seens Radio
 
 A personal AI radio station for Mac. An AI DJ — powered by Claude or OpenAI — picks music based on your taste, time of day, and mood, speaks between tracks, and streams audio from YouTube. Runs as a menu-bar Electron app or in any browser at `http://localhost:7477`.
@@ -273,7 +275,7 @@ npm run electron:dev
 npm run dist
 ```
 
-This builds `dist/mac-arm64/Seens Radio.app`. Copy it to `/Applications` or double-click to run.
+This builds a DMG installer at `dist/Seens Radio.dmg`. Open it to install the app, or double-click `dist/mac-arm64/Seens Radio.app` directly to run it without installing.
 
 ---
 
