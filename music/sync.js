@@ -3,15 +3,10 @@ import path from 'path';
 import { getPref } from '../src/state.js';
 import { ensureUserDir, readUserJSON, userPath } from '../src/paths.js';
 import { getMusicConnectors, syncConnectorTracks } from '../src/music-connector.js';
+import { getPeriodicSyncIntervalMs, mergeSyncedTracks } from './sync-policy.js';
 
 const MIN_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
-const DAILY_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let syncInFlight = null;
-
-function configuredPeriodicInterval() {
-  const value = Number(process.env.SEENS_MUSIC_SYNC_INTERVAL_MS);
-  return Number.isFinite(value) && value >= 60_000 ? value : DAILY_SYNC_INTERVAL_MS;
-}
 
 export async function syncAll({ force = false, reason = 'manual' } = {}) {
   if (syncInFlight) return syncInFlight;
@@ -77,8 +72,7 @@ async function _syncAll({ force = false, reason = 'manual' } = {}) {
   // outage cannot erase that source from the user's taste profile.
   const failedSources = new Set(results.errors.map(error => error.service));
   const previousTracks = readUserJSON('playlists.json') ?? [];
-  const retainedTracks = previousTracks.filter(track => failedSources.has(track?.source));
-  const deduped = deduplicateTracks([...allTracks, ...retainedTracks]);
+  const deduped = mergeSyncedTracks(allTracks, previousTracks, failedSources);
 
   ensureUserDir();
   fs.writeFileSync(userPath('playlists.json'), JSON.stringify(deduped, null, 2));
@@ -117,7 +111,7 @@ async function _syncAll({ force = false, reason = 'manual' } = {}) {
 
 // Keep connected-source taste data current without competing with a manual sync.
 export function startPeriodicSync() {
-  const interval = configuredPeriodicInterval();
+  const interval = getPeriodicSyncIntervalMs();
   const run = () => syncAll({ reason: 'periodic' }).catch(err => console.warn('[Sync] Periodic sync failed:', err.message));
   const timer = setInterval(run, interval);
   timer.unref?.();
