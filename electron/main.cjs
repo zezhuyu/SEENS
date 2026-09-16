@@ -257,6 +257,15 @@ function createWindow(port = serverPort || PORT) {
   mainWindow.loadURL(serverUrl(port, '/widget.html'));
   mainWindow.show();
 
+  // Preserve renderer diagnostics in the same log as the main process. This
+  // is especially useful for microphone and speech-recognition permission
+  // failures, which otherwise only appear in DevTools.
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (message.includes('[VoiceCommand]')) {
+      console.log(`[Renderer:${level}] ${message} (${sourceId}:${line})`);
+    }
+  });
+
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
     console.error('[Electron] Renderer failed to load:', errorCode, errorDescription, validatedURL);
     createErrorWindow(`Renderer failed to load ${validatedURL}\n${errorCode}: ${errorDescription}`);

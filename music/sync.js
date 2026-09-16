@@ -1,27 +1,33 @@
 import fs from 'fs';
 import path from 'path';
 import { getPref } from '../src/state.js';
-import { ensureUserDir, userPath } from '../src/paths.js';
+import { ensureUserDir, readUserJSON, userPath } from '../src/paths.js';
 import { getMusicConnectors, syncConnectorTracks } from '../src/music-connector.js';
 
 const MIN_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const DAILY_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let syncInFlight = null;
 
-export async function syncAll({ force = false } = {}) {
+function configuredPeriodicInterval() {
+  const value = Number(process.env.SEENS_MUSIC_SYNC_INTERVAL_MS);
+  return Number.isFinite(value) && value >= 60_000 ? value : DAILY_SYNC_INTERVAL_MS;
+}
+
+export async function syncAll({ force = false, reason = 'manual' } = {}) {
   if (syncInFlight) return syncInFlight;
-  syncInFlight = _syncAll({ force }).finally(() => { syncInFlight = null; });
+  syncInFlight = _syncAll({ force, reason }).finally(() => { syncInFlight = null; });
   return syncInFlight;
 }
 
-async function _syncAll({ force = false } = {}) {
+async function _syncAll({ force = false, reason = 'manual' } = {}) {
   const lastSync = parseInt(getPref('music.last_sync', '0'));
   if (!force && Date.now() - lastSync < MIN_SYNC_INTERVAL_MS) {
-    console.log('[Sync] Skipping — synced less than 6 hours ago. Use --force to override.');
+    console.log(`[Sync] Skipping (${reason}) — synced less than 6 hours ago. Use --force to override.`);
     return;
   }
 
-  const results = { spotify: [], youtube: [], apple: [], errors: [] };
+  console.log(`[Sync] Starting connected-library sync (${reason})${force ? ' [forced]' : ''}`);
+  const results = { spotify: [], youtube: [], apple: [], errors: [], successfulServices: [] };
 
   // Run all three built-in services in parallel, gracefully handle auth failures
   await Promise.all([
@@ -49,6 +55,7 @@ async function _syncAll({ force = false } = {}) {
       try {
         const tracks = await syncConnectorTracks(p);
         console.log(`[Sync:${p.name}] ${tracks.length} tracks`);
+        results.successfulServices.push(`connector:${p.name}`);
         return { name: p.name, tracks };
       } catch (err) {
         console.warn(`[Sync:${p.name}] Skipped: ${err.message}`);
@@ -61,7 +68,17 @@ async function _syncAll({ force = false } = {}) {
   const connectorTracks = connectorResults.flatMap(r => r.tracks);
 
   const allTracks = [...results.spotify, ...results.youtube, ...results.apple, ...connectorTracks];
-  const deduped = deduplicateTracks(allTracks);
+  if (!results.successfulServices.length) {
+    console.warn('[Sync] No connected library completed successfully; preserving the previous library and retrying later.');
+    return readUserJSON('playlists.json') ?? [];
+  }
+
+  // Preserve tracks from a source that temporarily failed, so a transient API
+  // outage cannot erase that source from the user's taste profile.
+  const failedSources = new Set(results.errors.map(error => error.service));
+  const previousTracks = readUserJSON('playlists.json') ?? [];
+  const retainedTracks = previousTracks.filter(track => failedSources.has(track?.source));
+  const deduped = deduplicateTracks([...allTracks, ...retainedTracks]);
 
   ensureUserDir();
   fs.writeFileSync(userPath('playlists.json'), JSON.stringify(deduped, null, 2));
@@ -83,7 +100,7 @@ async function _syncAll({ force = false } = {}) {
   const { setPref } = await import('../src/state.js');
   setPref('music.last_sync', String(Date.now()));
 
-  console.log(`[Sync] Done. ${deduped.length} unique tracks across ${Object.keys(results).filter(k => k !== 'errors').length} services.`);
+  console.log(`[Sync] Done (${reason}). ${deduped.length} unique tracks; successful sources: ${results.successfulServices.join(', ') || 'none'}.`);
   if (results.errors.length) console.warn('[Sync] Errors:', results.errors);
 
   // ── Seed reranker in background ───────────────────────────────────────────
@@ -100,13 +117,24 @@ async function _syncAll({ force = false } = {}) {
 
 // Keep connected-source taste data current without competing with a manual sync.
 export function startPeriodicSync() {
-  const run = () => syncAll().catch(err => console.warn('[Sync] Periodic sync failed:', err.message));
-  const timer = setInterval(run, DAILY_SYNC_INTERVAL_MS);
+  const interval = configuredPeriodicInterval();
+  const run = () => syncAll({ reason: 'periodic' }).catch(err => console.warn('[Sync] Periodic sync failed:', err.message));
+  const timer = setInterval(run, interval);
   timer.unref?.();
   const initial = setTimeout(run, 10_000);
   initial.unref?.();
-  console.log('[Sync] Periodic connected-library sync enabled (daily)');
+  console.log(`[Sync] Periodic connected-library sync enabled (every ${Math.round(interval / 3_600_000)}h; initial check in 10s)`);
   return timer;
+}
+
+// A newly connected source should influence the DJ immediately instead of
+// waiting for the next daily timer (or the six-hour freshness guard).
+export function scheduleConnectedLibrarySync(service) {
+  const timer = setTimeout(() => {
+    syncAll({ force: true, reason: `connected:${service}` })
+      .catch(err => console.warn(`[Sync] Connected ${service} sync failed:`, err.message));
+  }, 0);
+  timer.unref?.();
 }
 
 async function _seedRerankerBackground(tracks) {
@@ -157,7 +185,7 @@ async function syncService(service, results) {
     if (service === 'spotify') {
       const { syncRecentlyPlayed, syncTopTracks, syncPlaylists, syncTopArtists, syncLikedSongs } = await import('./spotify.js');
       const [recent, top, playlists, liked] = await Promise.all([syncRecentlyPlayed(), syncTopTracks(), syncPlaylists(), syncLikedSongs()]);
-results.spotify = [...recent, ...top, ...playlists, ...liked].filter(Boolean);
+      results.spotify = [...recent, ...top, ...playlists, ...liked].filter(Boolean);
       results.spotifyArtists = await syncTopArtists();
     } else if (service === 'youtube') {
       const { syncLikedVideos, syncPlaylists } = await import('./youtube.js');
@@ -168,6 +196,7 @@ results.spotify = [...recent, ...top, ...playlists, ...liked].filter(Boolean);
       const [songs, playlists] = await Promise.all([syncLibrarySongs(), syncLibraryPlaylists()]);
       results.apple = [...songs, ...playlists].filter(Boolean);
     }
+    results.successfulServices.push(service);
     console.log(`[Sync:${service}] ${results[service].length} tracks`);
   } catch (err) {
     console.warn(`[Sync:${service}] Skipped: ${err.message}`);

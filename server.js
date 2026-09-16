@@ -73,6 +73,7 @@ const { default: pluginsRoute }          = await import('./routes/plugins.js');
 const { default: musicConnectorsRoute }  = await import('./routes/music-connectors.js');
 const { default: widgetRoute }           = await import('./routes/widget.js');
 const { default: endSessionRoute }       = await import('./routes/end-session.js');
+const { default: voiceRoute }             = await import('./routes/voice.js');
 const streamHandler                  = (await import('./routes/stream.js')).default;
 
 app.use('/api/stream', streamAudioRoute);
@@ -95,6 +96,7 @@ app.use('/api/plugins', pluginsRoute);
 app.use('/api/music-connectors', musicConnectorsRoute);
 app.use('/api/widget', widgetRoute);
 app.use('/api/end-session', endSessionRoute);
+app.post('/api/voice/transcribe', express.raw({ type: 'audio/wav', limit: '8mb' }), voiceRoute);
 app.ws('/stream', streamHandler);
 
 // Apple Music user token endpoint (POSTed from MusicKit JS in the browser)
@@ -103,6 +105,8 @@ app.post('/api/apple-token', async (req, res) => {
   if (!token) return res.status(400).json({ error: 'token required' });
   const { saveUserToken } = await import('./auth/apple-auth.js');
   saveUserToken(token);
+  const { scheduleConnectedLibrarySync } = await import('./music/sync.js');
+  scheduleConnectedLibrarySync('apple');
   res.json({ ok: true });
 });
 
@@ -145,6 +149,8 @@ app.get('/callback/spotify', async (req, res) => {
     const { getPref } = await import('./src/state.js');
     const verifier = getPref('spotify.pkce_verifier');
     await exchangeCode(code, verifier);
+    const { scheduleConnectedLibrarySync } = await import('./music/sync.js');
+    scheduleConnectedLibrarySync('spotify');
     res.send('<h2>✓ Spotify connected!</h2><script>window.close()</script>');
   } catch (err) { res.send(`<h2>Error: ${err.message}</h2>`); }
 });
@@ -155,6 +161,8 @@ app.get('/callback/youtube', async (req, res) => {
   try {
     const { exchangeCode } = await import('./auth/youtube-auth.js');
     await exchangeCode(code);
+    const { scheduleConnectedLibrarySync } = await import('./music/sync.js');
+    scheduleConnectedLibrarySync('youtube');
     res.send('<h2>✓ YouTube connected!</h2><script>window.close()</script>');
   } catch (err) { res.send(`<h2>Error: ${err.message}</h2>`); }
 });
@@ -207,6 +215,17 @@ app.get('/api/location', async (req, res) => {
 
 app.get('/api/ready', (req, res) => {
   res.json({ app: 'seens-radio', ready: true });
+});
+
+app.get('/api/weather', async (req, res) => {
+  try {
+    const { getWeather } = await import('./src/weather.js');
+    const weather = await getWeather();
+    res.json({ weather });
+  } catch (error) {
+    console.warn('[Weather] API failed:', error.message);
+    res.status(503).json({ weather: null, error: 'weather unavailable' });
+  }
 });
 
 

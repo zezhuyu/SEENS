@@ -109,7 +109,7 @@ body {
 .widget.expanded { width:440px; height:min(780px, calc(100dvh - 40px)); }
 .widget.mini .tab-panel,.widget.mini .footer,.widget.mini .categories { display:none; }
 .widget.mini .hero { flex:1 1 auto; display:flex; flex-direction:column; justify-content:center; padding:10px 20px; text-align:center; border-bottom:0; }
-.widget.mini .hero-status { display:none; }
+.widget.mini .hero-status { display:flex; margin-bottom:8px; }
 .widget.mini .clock { font-size:68px; justify-content:center; }
 .widget.mini .clock .sec { display:none; }
 .widget.mini .clock-sub { display:none; }
@@ -246,6 +246,11 @@ body {
 .send-btn { appearance:none; border:0; width:30px; height:30px; border-radius:50%; background:var(--ink); color:var(--surface); display:grid; place-items:center; cursor:pointer; transition:opacity .15s; flex-shrink:0; }
 .send-btn:hover { opacity:.88; }
 .send-btn:disabled { opacity:.3; cursor:not-allowed; }
+.voice-btn { appearance:none; border:0; width:30px; height:30px; border-radius:50%; background:var(--surface-2); color:var(--ink-2); display:grid; place-items:center; cursor:pointer; transition:all .15s; flex-shrink:0; }
+.voice-btn:hover { background:var(--line); color:var(--ink); }
+.voice-btn.recording { background:var(--accent); color:var(--surface); box-shadow:0 0 0 4px color-mix(in oklch,var(--accent) 22%,transparent); animation:voice-pulse 1.4s ease-in-out infinite; }
+.voice-btn:disabled { opacity:.3; cursor:not-allowed; }
+@keyframes voice-pulse { 50% { transform:scale(1.08); } }
 .dj-bar { padding:8px 18px; border-top:0.5px solid var(--line-soft); display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--ink-2); flex-shrink:0; }
 .dj-bar .dj-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); flex-shrink:0; box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 25%,transparent); animation:pulse 2.2s ease-in-out infinite; }
 .dj-bar .dj-dot.idle { animation:none; background:var(--ink-3); box-shadow:none; }
@@ -440,6 +445,7 @@ const Icon = {
   Collapse: (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" {...p}><path d="M5 2v3H2M7 2v3h3M5 10V7H2M7 10V7h3"/></svg>,
   Close:    (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...p}><path d="M3 3l6 6M9 3l-6 6"/></svg>,
   Send:     (p) => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M2 6l8-4-3 9-2-4-3-1z"/></svg>,
+  Mic:      (p) => <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><rect x="5" y="1.5" width="6" height="9" rx="3"/><path d="M2.5 7.5a5.5 5.5 0 0 0 11 0M8 13v2M5.5 15h5"/></svg>,
   ThumbUp:  (p) => <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" {...p}><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>,
   ThumbDown:(p) => <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" {...p}><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L10.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>,
   Sparkle:  (p) => <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" {...p}><path d="M5 0l.9 3.2L9 4l-3.1.9L5 8l-.9-3.1L1 4l3.1-.8z"/></svg>,
@@ -1962,17 +1968,9 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
   useEffect(() => {
     const loadWeather = async () => {
       try {
-        const s = await fetch('/api/settings').then(r => r.ok ? r.json() : null);
-        const loc = s?.location;
-        if (!loc) return;
-        const url = `https://wttr.in/${encodeURIComponent(loc)}?format=j1`;
-        const d = await fetch(url).then(r => r.ok ? r.json() : null);
-        if (!d) return;
-        const cur = d.current_condition?.[0];
-        if (!cur) return;
-        const tempC = cur.temp_C;
-        const code  = Number(cur.weatherCode);
-        setWeather({ code, tempC });
+        const response = await fetch('/api/weather');
+        const result = response.ok ? await response.json() : null;
+        if (result?.weather) setWeather(result.weather);
       } catch {}
     };
 
@@ -2948,6 +2946,12 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
 
   // ── chat component
   const [chatText, setChatText] = useState('');
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState('');
+  const speechRecognitionRef = useRef(null);
+  const voiceFinalRef = useRef(false);
+  const voiceRecorderRef = useRef(null);
+  const voiceResumePlaybackRef = useRef(false);
   const chatScrollRef = useRef(null);
   useEffect(() => {
     if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
@@ -2960,6 +2964,143 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
     setChatText('');
     sendChat(t);
   };
+
+  const toggleVoiceCommand = () => {
+    if (voiceRecorderRef.current) {
+      voiceRecorderRef.current.stop?.();
+      return;
+    }
+    const start = async () => {
+      let stream;
+      let context;
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('microphone-api-unavailable');
+        setVoiceStatus('Requesting microphone…');
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        // Do not let the currently playing track become the voice command.
+        voiceResumePlaybackRef.current = !!audioRef.current && !audioRef.current.paused;
+        if (voiceResumePlaybackRef.current) audioRef.current.pause();
+        context = new AudioContext();
+        const source = context.createMediaStreamSource(stream);
+        const processor = context.createScriptProcessor(4096, 1, 1);
+        const chunks = [];
+        let samples = 0;
+        let speechDetected = false;
+        let lastSoundAt = 0;
+        let voicedSamples = 0;
+        let calibrationRms = 0;
+        let calibrationBlocks = 0;
+        let noiseFloor = 0.003;
+        let stopped = false;
+        let maxRms = 0;
+        const startedAt = Date.now();
+        processor.onaudioprocess = (event) => {
+          const data = event.inputBuffer.getChannelData(0);
+          chunks.push(new Float32Array(data));
+          samples += data.length;
+          let energy = 0;
+          for (const value of data) energy += value * value;
+          const rms = Math.sqrt(energy / data.length);
+          maxRms = Math.max(maxRms, rms);
+          // Calibrate the microphone's idle noise for the first ~0.5 seconds.
+          // Electron/macOS commonly reports a small non-zero signal even when
+          // nobody is speaking. Treating that as speech makes Whisper invent
+          // phrases from silence or music bleed.
+          if (!speechDetected && calibrationBlocks < 6) {
+            calibrationRms += rms;
+            calibrationBlocks += 1;
+            noiseFloor = Math.max(0.003, calibrationRms / calibrationBlocks);
+          }
+          const speechThreshold = Math.max(0.006, noiseFloor * 2.5);
+          if (rms > speechThreshold) {
+            speechDetected = true;
+            voicedSamples += data.length;
+            lastSoundAt = Date.now();
+          }
+          setVoiceStatus(speechDetected ? 'Listening…' : 'Waiting for speech…');
+          if (speechDetected && Date.now() - startedAt > 4000 && Date.now() - lastSoundAt > 1400) recorder.stop(true);
+        };
+        source.connect(processor);
+        processor.connect(context.destination);
+        await context.resume();
+        setVoiceListening(true);
+        setVoiceStatus('Listening… click again when finished');
+        console.info('[VoiceCommand] local recorder started', { sampleRate: context.sampleRate });
+        const recorder = {
+          stop: async (automatic = false) => {
+            if (stopped) return;
+            stopped = true;
+            console.info(`[VoiceCommand] recorder stopping automatic=${automatic} samples=${samples} voicedSamples=${voicedSamples} noiseFloor=${noiseFloor.toFixed(5)} maxRms=${maxRms.toFixed(5)} speechDetected=${speechDetected}`);
+            voiceRecorderRef.current = null;
+            processor.disconnect(); source.disconnect(); stream.getTracks().forEach(track => track.stop());
+            await context.close();
+            setVoiceListening(false);
+            const resumePlayback = () => {
+              if (voiceResumePlaybackRef.current && audioRef.current) audioRef.current.play().catch(() => {});
+              voiceResumePlaybackRef.current = false;
+            };
+            if (!samples || !speechDetected || voicedSamples < context.sampleRate * 0.25) {
+              resumePlayback();
+              setVoiceStatus('No speech detected. Speak clearly after the microphone turns green.');
+              return;
+            }
+            setVoiceStatus('Transcribing locally…');
+            const wav = encodeWav(chunks, samples, context.sampleRate);
+            try {
+              const response = await fetch('/api/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav });
+              const result = await response.json().catch(() => ({}));
+              const transcript = (result.text || '').replace(/\[(?:blank_audio|sound|music|noise|silence|inaudible|unclear)\]/gi, '').trim();
+              if (!response.ok || !transcript) { resumePlayback(); setVoiceStatus('Audio detected, but no spoken words were recognized.'); return; }
+              console.info('[VoiceCommand] local transcript', { text: transcript });
+              setVoiceStatus('Sending to the DJ…');
+              resumePlayback();
+              sendChat(transcript);
+            } catch (error) {
+              resumePlayback();
+              console.warn('[VoiceCommand] local transcription failed', error);
+              const message = 'Local voice transcription is unavailable. Check that Whisper is installed.';
+              setVoiceStatus(message); setDjText(message);
+            }
+          },
+        };
+        voiceRecorderRef.current = recorder;
+      } catch (error) {
+        stream?.getTracks?.().forEach(track => track.stop());
+        if (context) await context.close().catch(() => {});
+        console.warn('[VoiceCommand] microphone/start failed', error);
+        const message = error?.name === 'NotAllowedError'
+          ? 'Microphone access was denied. Allow Seens Radio in System Settings → Privacy & Security → Microphone.'
+          : 'Could not start voice input. Try again.';
+        setVoiceListening(false);
+        setVoiceStatus(message);
+        setDjText(message);
+      }
+    };
+    void start();
+  };
+
+  const encodeWav = (chunks, sampleCount, sampleRate) => {
+    const buffer = new ArrayBuffer(44 + sampleCount * 2);
+    const view = new DataView(buffer);
+    const write = (offset, text) => [...text].forEach((char, i) => view.setUint8(offset + i, char.charCodeAt(0)));
+    write(0, 'RIFF'); view.setUint32(4, 36 + sampleCount * 2, true); write(8, 'WAVE'); write(12, 'fmt ');
+    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true); write(36, 'data'); view.setUint32(40, sampleCount * 2, true);
+    let peak = 0;
+    for (const chunk of chunks) for (const value of chunk) peak = Math.max(peak, Math.abs(value));
+    // macOS can deliver microphone samples around 0.003 peak; keep enough
+    // gain for those recordings to reach Whisper's useful input range.
+    const gain = peak > 0 ? Math.min(180, 0.85 / peak) : 1;
+    let offset = 44;
+    // Normalize quiet macOS input to a useful Whisper level; cap gain to avoid
+    // turning an entirely silent/noisy device into a clipped recording.
+    for (const chunk of chunks) for (const value of chunk) { const sample = Math.max(-1, Math.min(1, value * gain)); view.setInt16(offset, sample < 0 ? sample * 32768 : sample * 32767, true); offset += 2; }
+    return new Blob([buffer], { type: 'audio/wav' });
+  };
+
+  useEffect(() => () => {
+    speechRecognitionRef.current?.abort?.();
+  }, []);
 
   const categories = ['All','Music','Painting','Photograph','Film','Poem','Place','Building','Sculpture','Food','Story'];
 
@@ -3029,12 +3170,10 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
         <div className="hero-status">
           <span style={{ display:'flex', alignItems:'center', gap:8 }}>
             {fmtDate(now)}
-            {weather && (
-              <span style={{ display:'inline-flex', alignItems:'center', gap:3, opacity:.80 }}>
-                {wmoIcon(weather.code)}
-                <span>{weather.tempC}°C</span>
-              </span>
-            )}
+            {weather && <span style={{ display:'inline-flex', alignItems:'center', gap:3, opacity:.80 }}>
+              {wmoIcon(weather.code)}
+              <span>{Math.round(weather.tempC)}°C</span>
+            </span>}
           </span>
           {started && connected && <span><span className="dot"/>LIVE</span>}
         </div>
@@ -3271,6 +3410,11 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
               <form className="chat-input-row" onSubmit={submitChat}>
                 <input type="text" placeholder="Ask the DJ anything…" value={chatText}
                   onChange={e => setChatText(e.target.value)} disabled={djBusy}/>
+                <button type="button" className={`voice-btn${voiceListening ? ' recording' : ''}`} onClick={toggleVoiceCommand}
+                  disabled={djBusy} aria-label={voiceListening ? 'Stop voice input' : 'Speak to the DJ'}
+                  title={voiceStatus || (voiceListening ? 'Stop listening' : 'Speak to the DJ')}>
+                  <Icon.Mic/>
+                </button>
                 <button type="submit" className="send-btn" disabled={!chatText.trim()||djBusy}><Icon.Send/></button>
               </form>
             </div>
