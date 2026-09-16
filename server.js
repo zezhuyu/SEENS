@@ -266,6 +266,10 @@ globalThis.SEENS_SERVER_READY = new Promise((resolve, reject) => {
     // perpetually valid so scheduled sessions never hit an expired token.
     import('./src/token-refresh.js').then(({ startTokenRefresh }) => startTokenRefresh());
 
+    // Refresh connected Spotify/YouTube/Apple libraries daily so taste and
+    // reranker candidates reflect current listening habits.
+    import('./music/sync.js').then(({ startPeriodicSync }) => startPeriodicSync());
+
     // TTS cache pruning once a day
     import('./src/tts.js').then(({ pruneCache }) => {
       pruneCache();

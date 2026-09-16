@@ -91,6 +91,20 @@ function handleWS(msg) {
     case 'queue-prefilled': player.onQueuePrefilled(msg); break;
     case 'now-playing':  player.onNowPlaying(msg.track); break;
     case 'command':      player.onCommand(msg.action); break;
+    case 'session-started':
+      // Remote clients (the StopWatch/bridge) can start a session without
+      // clicking the desktop overlay. Unlock playback and accept the next
+      // streamed dj-response as an active session.
+      player.started = true;
+      player.waitingForInteraction = false;
+      // A remote Tune In (watch/bridge) has already supplied the user
+      // gesture; do not leave the desktop overlay blocking the active player.
+      window._dismissOverlay?.();
+      break;
+    case 'session-ended':
+      player.started = false;
+      player.pause();
+      break;
   }
 }
 
@@ -112,10 +126,16 @@ document.getElementById('start-btn').addEventListener('click', async () => {
   player.waitingForInteraction = false;
   player.started = true;
   const requestId = window.__seensNewRequestId();
+  dbg('Tune In', `accepted clientId=${CLIENT_ID} requestId=${requestId}`);
 
   try {
-    // Clear stale queue so we always get a fresh plan, not leftovers from last session
-    await fetch('/api/settings/queue/clear', { method: 'POST' });
+    const sessionStartRes = await fetch('/api/settings/session/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: CLIENT_ID, requestId }),
+    });
+    const sessionStart = await sessionStartRes.json().catch(() => ({}));
+    dbg('Tune In', `session/start alreadyActive=${!!sessionStart.alreadyActive}`);
 
     await fetch('/api/chat', {
       method: 'POST',
@@ -124,6 +144,7 @@ document.getElementById('start-btn').addEventListener('click', async () => {
         message: "Start my listening session. Tell me what you have planned and introduce the first track.",
         clientId: CLIENT_ID,
         requestId,
+        internal: true,
       }),
     });
     // dj-response arrives via WS → overlay dismissed → DJ speaks → music plays

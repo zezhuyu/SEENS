@@ -7,6 +7,7 @@ import { getPref, setPref, clearQueue, setSessionStart, getSessionContext, getSe
 import { AGENT_NAMES, getActiveAgentName, agentStatus, agentReset } from '../src/ai/index.js';
 import { isRerankerEnabled, enableReranker, disableReranker, isSubprocessRunning, getHealth as getRerankerHealth, seedPlaylist, seedLibrary } from '../src/reranker.js';
 import { reloadSchedule, regenerateSchedule } from '../src/scheduler.js';
+import { broadcast } from '../src/ws-broadcast.js';
 import { ensureUserDir, userPath, readUserFile, readUserJSON } from '../src/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -526,13 +527,43 @@ router.delete('/reranker/saved-playlists', (req, res) => {
 
 // POST /api/settings/queue/clear — flush queue
 router.post('/queue/clear', (req, res) => {
+  const now = Math.floor(Date.now() / 1000);
+  const startedAt = parseInt(getPref('session.started_at', '0')) || 0;
+  const active = startedAt > 0 && now - startedAt >= 0 && now - startedAt < 3 * 3600;
+  const forced = req.body?.force === true;
+  console.warn(`[QueueClear] request active=${active} forced=${forced} sessionStartedAt=${startedAt || 'none'} clientId=${req.body?.clientId ?? 'unknown'} requestId=${req.body?.requestId ?? 'unknown'}`);
+  if (active && !forced) {
+    console.warn('[QueueClear] ignored during active session — preserving current queue');
+    return res.json({ ok: true, ignored: true, reason: 'active-session' });
+  }
   clearQueue();
   res.json({ ok: true });
 });
 
 // POST /api/settings/session/start — mark session start so the DJ remembers all instructions from it
 router.post('/session/start', (req, res) => {
+  const now = Math.floor(Date.now() / 1000);
+  const startedAt = parseInt(getPref('session.started_at', '0')) || 0;
+  const age = startedAt > 0 ? now - startedAt : null;
+  const active = startedAt > 0 && age >= 0 && age < 3 * 3600;
+  console.log(`[SessionStart] request clientId=${req.body?.clientId ?? 'unknown'} requestId=${req.body?.requestId ?? 'unknown'} active=${active} startedAt=${startedAt || 'none'} ageSec=${age ?? 'none'}`);
+  if (active) {
+    console.warn('[SessionStart] duplicate start ignored — preserving current listening session and queue');
+    return res.json({
+      ok: true,
+      alreadyActive: true,
+      mood: {
+        ...getSessionMood(),
+        label: getSessionMoodLabel(),
+      },
+    });
+  }
   setSessionStart();
+  // Some older bridge callers do not send requestId. Give those callers a
+  // one-use marker too, so their first Tune In works without allowing repeats.
+  setPref('session.pending_tune_in_request_id', req.body?.requestId || '__unpaired__');
+  console.log('[SessionStart] new listening session accepted — broadcasting session-started');
+  broadcast('session-started', { reason: 'explicit-tune-in' });
   res.json({
     ok: true,
     mood: {

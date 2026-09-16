@@ -29,6 +29,19 @@ test('targeted playback events reach only the requesting client', () => {
   observer.emit('close');
 });
 
+test('a reconnect replaces the stale socket for one client ID', () => {
+  const stale = new FakeSocket();
+  const current = new FakeSocket();
+  register(stale, 'desktop-client');
+  register(current, 'desktop-client');
+
+  deliver('dj-response', { say: 'one copy' }, { clientId: 'desktop-client' });
+  assert.deepEqual(stale.messages, []);
+  assert.deepEqual(current.messages.map(message => message.say), ['one copy']);
+
+  current.emit('close');
+});
+
 test('a missing targeted client is buffered for reconnect without leaking to other devices', () => {
   const observer = new FakeSocket();
   register(observer, 'mac-client');

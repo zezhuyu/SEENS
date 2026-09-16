@@ -60,9 +60,11 @@ export async function generate(systemPrompt, userMessage) {
   const fullPrompt = `${systemPrompt}\n${JSON_INSTRUCTION}\n\n---\nUser: ${userMessage}`;
 
   // --json: JSONL output mode — single-shot, non-conversational (no stdin reads).
-  // --full-auto: sets approval=never — without it codex reads stdin to ask for approval.
+  // --approve-for-me: sets approval=never — without it codex reads stdin to ask for
+  // approval. Replaces the removed --full-auto flag (same intent: sandboxed,
+  // no interactive prompts).
   // --skip-git-repo-check: CODEX_WORKSPACE is a fresh git repo, may not be in trust list.
-  const args = ['exec', fullPrompt, '--json', '--full-auto', '--skip-git-repo-check',
+  const args = ['exec', fullPrompt, '--json', '--approve-for-me', '--skip-git-repo-check',
                 '--ignore-user-config'];  // skip ~/.codex/config.toml MCP servers (approval prompts)
   args.push(...codexReasoningArgs(), ...codexFastModeArgs());
   if (CODEX_MODEL) args.push('-m', CODEX_MODEL);

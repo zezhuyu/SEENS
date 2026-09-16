@@ -7,21 +7,54 @@ import { deliver } from '../src/ws-broadcast.js';
 
 const router = express.Router();
 let transitioning = false;
+let activeTransition = null;
+let cachedTransition = null;
+
+function transitionKey(track) {
+  return track.video_id
+    ? `video:${track.video_id}`
+    : `title:${String(track.resolved_title ?? track.title ?? '').trim().toLowerCase()}::artist:${String(track.resolved_artist ?? track.artist ?? '').trim().toLowerCase()}`;
+}
+
+function deliverTransition(payload, clientIds) {
+  for (const clientId of new Set(clientIds)) {
+    deliver('dj-response', payload, { clientId });
+  }
+}
 
 router.post('/', async (req, res) => {
   const { clientId = null } = req.body ?? {};
   res.json({ ok: true }); // respond immediately, work async
-
-  if (transitioning) return;
-  transitioning = true;
+  let ownsTransition = false;
 
   try {
     const queue = peekNext();
     const next = queue[0];
     if (!next) return;
+    const key = transitionKey(next);
+    if (activeTransition?.key === key) {
+      activeTransition.clientIds.push(clientId);
+      console.log(`[Transition] coalesced duplicate request for "${next.title}"`);
+      return;
+    }
+    if (cachedTransition?.key === key && Date.now() - cachedTransition.createdAt < 5 * 60 * 1000) {
+      console.log(`[Transition] reused cached intro for "${next.title}"`);
+      deliverTransition(cachedTransition.payload, [clientId]);
+      return;
+    }
+    if (transitioning) return;
+    transitioning = true;
+    ownsTransition = true;
+    activeTransition = { key, clientIds: [clientId] };
 
     const nextTitle  = next.resolved_title  ?? next.title;
     const nextArtist = next.resolved_artist ?? next.artist ?? '';
+    const transitionFor = {
+      id: next.id,
+      videoId: next.video_id ?? null,
+      title: nextTitle,
+      artist: nextArtist,
+    };
 
     console.log(`[Transition] generating intro for "${nextTitle}" by ${nextArtist}`);
 
@@ -47,20 +80,26 @@ router.post('/', async (req, res) => {
       return null;
     });
 
-    deliver('dj-response', {
+    const payload = {
       say,
       ttsUrl: ttsResult?.url ?? null,
       trigger: 'transition',
+      transitionFor,
       playIntent: 'end',
       firstTrack: null,
       play: [],
-    }, { clientId });
+    };
+    cachedTransition = { key, createdAt: Date.now(), payload };
+    deliverTransition(payload, activeTransition?.clientIds ?? [clientId]);
 
     console.log(`[Transition] done — ttsUrl=${ttsResult?.url ?? 'null'}`);
   } catch (err) {
     console.error('[Transition] error:', err.message);
   } finally {
-    transitioning = false;
+    if (ownsTransition) {
+      transitioning = false;
+      activeTransition = null;
+    }
   }
 });
 

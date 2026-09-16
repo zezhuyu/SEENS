@@ -10,6 +10,8 @@ import { prewarmCache } from '../routes/stream-audio.js';
 import { callPlugin } from './plugin-runner.js';
 import { appendWikipediaFact, fetchDirectTrackContext, fetchTrackContext } from './track-context.js';
 import { alignIntroToFirstTrack, getTtsDeliveryPolicy, shouldRewriteMusicIntro } from './intro-policy.js';
+import { resolveQueueIntent } from './playback-policy.js';
+import { isAcceptedTuneIn } from './tune-in-policy.js';
 
 // Truncate large text fields in plugin data before sending to the AI.
 // Full article bodies / transcripts can be thousands of tokens; summaries are enough.
@@ -45,8 +47,21 @@ let currentTriggerType = null;
 export async function handleInput(input, triggerType = 'user-chat', {
   clientId = null,
   requestId = null,
+  recordUserMessage = true,
 } = {}) {
   const trimmed = input.trim();
+  console.log(`[Router:${triggerType}] input received clientId=${clientId ?? 'unknown'} requestId=${requestId ?? 'unknown'} text=${JSON.stringify(trimmed.slice(0, 120))}`);
+
+  const isTuneInRequest = triggerType === 'user-chat' && /^start my listening session\b/i.test(trimmed);
+  if (isTuneInRequest) {
+    const pendingRequestId = getPref('session.pending_tune_in_request_id', '');
+    if (!isAcceptedTuneIn({ requestId, pendingRequestId })) {
+      console.warn(`[TuneInGuard] ignored duplicate/unpaired Tune In clientId=${clientId ?? 'unknown'} requestId=${requestId ?? 'unknown'} pending=${pendingRequestId || 'none'}`);
+      return { ignored: true, duplicateTuneIn: true };
+    }
+    setPref('session.pending_tune_in_request_id', '');
+    console.log(`[TuneInGuard] accepted initial Tune In requestId=${requestId}`);
+  }
 
   // Direct command — no AI needed
   for (const cmd of DIRECT_COMMANDS) {
@@ -61,6 +76,9 @@ export async function handleInput(input, triggerType = 'user-chat', {
       // User clicked Tune In (or sent a message) while a lower-priority background call
       // (daily-plan, auto-refill, scheduler) is in progress — cancel it immediately.
       console.log(`[Router:user-chat] preempting in-flight ${currentTriggerType} call`);
+      // Abort is best effort; invalidate the old request before cancellation so
+      // late provider results cannot commit to the queue.
+      aiCallGeneration++;
       cancelCurrentCall();
       let waited = 0;
       while (aiCallInFlight && waited < 3000) {
@@ -82,6 +100,13 @@ export async function handleInput(input, triggerType = 'user-chat', {
   currentTriggerType = triggerType;
 
   try {
+
+  const isCurrentGeneration = () => aiCallGeneration === myGeneration;
+  const abortIfStale = () => {
+    if (isCurrentGeneration()) return false;
+    console.log(`[Router:${triggerType}] stale generation ${myGeneration} — dropping result`);
+    return true;
+  };
 
   const t0 = Date.now();
   const ts = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
@@ -107,7 +132,10 @@ export async function handleInput(input, triggerType = 'user-chat', {
   // (in ~/.seens/agent/ via Claude session or Codex messages array).
   // Writing to state.db here would duplicate memory in the wrong place.
   const agentActive = isAgentActive();
-  if (!agentActive) addMessage('user', trimmed);
+  // Tune In uses an internal bootstrap prompt to seed the DJ. It is still sent
+  // to the agent, but callers can keep that implementation detail out of the
+  // user's visible conversation history.
+  if (!agentActive && recordUserMessage) addMessage('user', trimmed);
 
   // Resolve the active song early so similarity requests can inject the track name
   // into the AI prompt — otherwise "this one" is ambiguous when the chat history
@@ -143,11 +171,10 @@ export async function handleInput(input, triggerType = 'user-chat', {
   console.log(`[Router:${triggerType}] start → recommendation path (${agentName})`);
 
   let djResponse;
-  const isTuneInRequest = triggerType === 'user-chat' && /^start my listening session\b/i.test(trimmed);
   const isCachedRerankerRequest = isTuneInRequest || triggerType === 'auto-refill';
   const cachedReference = isCachedRerankerRequest ? getCachedPreferenceReference(12) : [];
   const blockedCachedTracks = isCachedRerankerRequest
-    ? [...getSessionSuggestions(), ...getRecentCrossSessionSuggestions(7, 50)]
+    ? [...getSessionSuggestions(), ...getRecentCrossSessionSuggestions(30, 1000)]
     : [];
   let cachedSession = isCachedRerankerRequest
     ? buildCachedRerankerSessionWithFallback(cachedReference, blockedCachedTracks, 8)
@@ -194,6 +221,7 @@ export async function handleInput(input, triggerType = 'user-chat', {
     }
     console.log(`[Router:${triggerType}]   tracks=${djResponse.play?.length ?? 0}  say="${djResponse.say?.slice(0, 100)}"`);
     console.log(`[Router:${triggerType}]   pluginCall=${JSON.stringify(djResponse.pluginCall ?? null)}`);
+    if (abortIfStale()) return { ignored: true };
   } catch (err) {
     console.error(`[Router:${triggerType}] ${ts()} AI error:`, err.message);
     return { error: err.message };
@@ -405,6 +433,7 @@ export async function handleInput(input, triggerType = 'user-chat', {
 
   // Persist session context if the AI captured new info from this message
   if (djResponse.sessionContext) {
+    if (abortIfStale()) return { ignored: true };
     setSessionContext(djResponse.sessionContext);
     broadcast('session-context', { context: djResponse.sessionContext });
   }
@@ -738,15 +767,13 @@ export async function handleInput(input, triggerType = 'user-chat', {
 
   let resolvedTracks = [];
   const defaultIntent = (triggerType === 'user-chat' && hasTracks) ? 'now' : 'end';
-  let intent = djResponse.playIntent ?? defaultIntent;
-
-  // Keyword override: user's phrasing is more reliable than AI intent inference
-  if (triggerType === 'user-chat') {
-    const lower = trimmed.toLowerCase();
-    if (/\b(next|after this|queue(?: it)? up|play next)\b/.test(lower)) intent = 'next';
-    else if (/\b(add|save for later|put in(?: the)? queue|add to playlist|later)\b/.test(lower) &&
-             !/\bnow\b/.test(lower)) intent = 'end';
-  }
+  let intent = resolveQueueIntent({
+    triggerType,
+    intent: djResponse.playIntent ?? defaultIntent,
+    trackCount: djResponse.play?.length ?? 0,
+    isTuneInRequest,
+    userText: trimmed,
+  });
 
   const addToQueue = (intent === 'now' || intent === 'next') ? enqueueNext : enqueue;
 
@@ -756,8 +783,10 @@ export async function handleInput(input, triggerType = 'user-chat', {
   const needsFreshResolve = (finalRanked?.length || dbFallbackSongs?.length) && djResponse.play?.length;
   if (needsFreshResolve) {
     try {
+      if (abortIfStale()) return { ignored: true };
       console.log(`[Router:${triggerType}] ${ts()} resolving final reranked playlist (${djResponse.play.length} songs) via yt-dlp`);
       resolvedTracks = await resolveTracksOrdered(djResponse.play);
+      if (abortIfStale()) return { ignored: true };
       addToQueue(resolvedTracks);
       console.log(`[Router:${triggerType}] ${ts()} final reranked resolve done — ${resolvedTracks.length}/${djResponse.play?.length ?? 0} tracks queued (intent=${intent})`);
       prewarmCache(resolvedTracks.map(t => t.videoId));
@@ -766,6 +795,7 @@ export async function handleInput(input, triggerType = 'user-chat', {
       try { addToQueue(djResponse.play.map(t => ({ source: t.source ?? 'any', title: t.title, artist: t.artist ?? '', uri: null }))); } catch {}
     }
   } else if (resolveResult.status === 'fulfilled') {
+    if (abortIfStale()) return { ignored: true };
     let resolvedRaw = resolveResult.value;
     // Re-sort resolved tracks to match the FINAL reranker-selected play order.
     const finalPlayOrder = djResponse.play?.length ? djResponse.play : null;
@@ -802,6 +832,7 @@ export async function handleInput(input, triggerType = 'user-chat', {
       prewarmCache(resolvedTracks.map(t => t.videoId));
       if (progressiveResolution) {
         progressiveResolution.all.then(allTracks => {
+          if (abortIfStale()) return;
           const remaining = allTracks.slice(1).filter(Boolean);
           hydrateQueuedTracks(remaining);
           prewarmCache(remaining.map(track => track.videoId));
@@ -814,6 +845,7 @@ export async function handleInput(input, triggerType = 'user-chat', {
       console.warn(`[Router:${triggerType}] ${ts()} enqueue failed:`, err.message);
     }
   } else {
+    if (abortIfStale()) return { ignored: true };
     console.warn(`[Router:${triggerType}] ${ts()} resolve failed:`, resolveResult.reason?.message);
     try { addToQueue(djResponse.play.map(t => ({ source: t.source ?? 'any', title: t.title, artist: t.artist ?? '', uri: null }))); } catch {}
   }
@@ -983,12 +1015,17 @@ export async function handleInput(input, triggerType = 'user-chat', {
 
   console.log(`[Router:${triggerType}] ${ts()} broadcasting — firstTrack="${firstTrack?.resolvedTitle ?? firstTrack?.title ?? 'none'}" videoId=${firstTrack?.videoId ?? 'null'}`);
 
+  if (abortIfStale()) return { ignored: true };
+
   deliver('dj-response', {
     agent: agentName,
     say: finalSay,
     ttsUrl,
     play: resolvedTracks.length ? resolvedTracks : djResponse.play,
-    firstTrack,
+    // Only a foreground user request may nominate a track for immediate
+    // playback. Background maintenance still receives the queued tracks, but
+    // never a firstTrack that a client could accidentally cold-start.
+    firstTrack: triggerType === 'user-chat' ? firstTrack : null,
     reason: djResponse.reason,
     segue: djResponse.segue,
     playIntent: intent,
@@ -1029,7 +1066,7 @@ export async function handleInput(input, triggerType = 'user-chat', {
   return { djResponse, resolvedTracks, ttsUrl, agent: agentName };
 
   } finally {
-    if (aiCallGeneration === myGeneration) {
+    if (aiCallGeneration === myGeneration || currentTriggerType === triggerType) {
       aiCallInFlight = false;
       currentTriggerType = null;
     }

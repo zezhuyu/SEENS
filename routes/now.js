@@ -18,7 +18,12 @@ router.get('/', (req, res) => {
 
   if (req.query.full === '1') {
     const allQueued = db.prepare('SELECT * FROM queue ORDER BY position ASC LIMIT 50').all()
-      .map(t => ({ title: t.resolved_title ?? t.title, artist: t.resolved_artist ?? t.artist ?? '' }));
+      .map(t => ({
+        id: t.id,
+        videoId: t.video_id ?? null,
+        title: t.resolved_title ?? t.title,
+        artist: t.resolved_artist ?? t.artist ?? '',
+      }));
     return res.json({ nowPlaying: nowPlaying ?? null, upNext: upNext ?? null, queue: allQueued });
   }
 

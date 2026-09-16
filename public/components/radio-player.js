@@ -254,6 +254,15 @@ export class RadioPlayer {
         this.pendingIntroTTS = msg.ttsUrl;
         this.transitionRequested = true; // don't fire another transition request
       }
+    } else if (!userAsked) {
+      // Background responses only extend the queue. Never cold-start a track
+      // during the gap between audio elements.
+      if (msg.trigger === 'transition' && msg.ttsUrl) {
+        log('DJ', 'queueing late transition intro');
+        this.enqueueTTS(msg.ttsUrl);
+      } else {
+        log('DJ', `ignoring background playback start (trigger=${msg.trigger})`);
+      }
     } else if (audioActive && userAsked) {
       // User request while music is playing
       if (intent === 'now') {

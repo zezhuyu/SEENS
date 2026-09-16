@@ -108,7 +108,7 @@ export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode =
   // Fragment 5b — Suggestion history: queued + session + recent cross-session (hard block) + older cross-session (soft)
   const queuedTracks                 = getQueueTracks();
   const sessionSuggestions           = getSessionSuggestions();
-  const recentCrossSessionSuggestions = getRecentCrossSessionSuggestions(7, 300); // last 7 days
+  const recentCrossSessionSuggestions = getRecentCrossSessionSuggestions(30, 1000); // last 30 days
   const olderCrossSessionSuggestions  = getCrossSessionSuggestions(75);           // older than 7 days
 
   // Merge queued + session + last-7-days into one hard-block list.
@@ -133,7 +133,7 @@ export async function buildSystemPrompt(triggerType = 'user-chat', { agentMode =
 
   const suggestionHistory = [
     hardBlockList.length
-      ? `⛔ ABSOLUTE HARD BLOCK — ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} you MUST NOT suggest (already played or suggested in the last 7 days):\n${
+      ? `⛔ ABSOLUTE HARD BLOCK — ${hardBlockList.length} track${hardBlockList.length > 1 ? 's' : ''} you MUST NOT suggest (already played or suggested in the last 30 days):\n${
           hardBlockList.map(s => `- "${s.title}"${s.artist ? ` by ${s.artist}` : ''}`).join('\n')
         }\nEven if a title or artist appears in your Library or Discoveries sections, skip it if it's listed here.`
       : '',
@@ -241,7 +241,7 @@ export function buildFastSystemPrompt(triggerType = 'user-chat', { rerankerRefer
   const nowPlaying = recentPlays[0] ?? queued[0] ?? null;
   const blocked = new Map();
   const blockKey = track => `${track.title?.toLowerCase()}|||${(track.artist ?? '').toLowerCase()}`;
-  for (const track of [...getSessionSuggestions(), ...getRecentCrossSessionSuggestions(7, 50)]) {
+  for (const track of [...getSessionSuggestions(), ...getRecentCrossSessionSuggestions(30, 1000)]) {
     if (track?.title && !blocked.has(blockKey(track))) blocked.set(blockKey(track), track);
   }
 

@@ -230,7 +230,7 @@ async function generateCodex(systemPrompt, userMessage, plugins) {
       ? ['exec', 'resume', sessionId, fullPrompt]
       : ['exec', fullPrompt];
     a.push('--json');                // JSONL events: thread_id + item.completed
-    a.push('--full-auto');           // approval=never — prevents stdin prompt for approval
+    a.push('--approve-for-me');      // approval=never — replaces the removed --full-auto
     a.push('--skip-git-repo-check'); // cwd may not be in codex trusted list in packaged app
     a.push('--ignore-user-config');  // skip ~/.codex/config.toml MCP servers (seens_notify
                                      // has approval_mode=approve which triggers stdin read)

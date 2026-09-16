@@ -5,8 +5,16 @@ import { ensureUserDir, userPath } from '../src/paths.js';
 import { getMusicConnectors, syncConnectorTracks } from '../src/music-connector.js';
 
 const MIN_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const DAILY_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let syncInFlight = null;
 
 export async function syncAll({ force = false } = {}) {
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = _syncAll({ force }).finally(() => { syncInFlight = null; });
+  return syncInFlight;
+}
+
+async function _syncAll({ force = false } = {}) {
   const lastSync = parseInt(getPref('music.last_sync', '0'));
   if (!force && Date.now() - lastSync < MIN_SYNC_INTERVAL_MS) {
     console.log('[Sync] Skipping — synced less than 6 hours ago. Use --force to override.');
@@ -90,8 +98,19 @@ export async function syncAll({ force = false } = {}) {
   return deduped;
 }
 
+// Keep connected-source taste data current without competing with a manual sync.
+export function startPeriodicSync() {
+  const run = () => syncAll().catch(err => console.warn('[Sync] Periodic sync failed:', err.message));
+  const timer = setInterval(run, DAILY_SYNC_INTERVAL_MS);
+  timer.unref?.();
+  const initial = setTimeout(run, 10_000);
+  initial.unref?.();
+  console.log('[Sync] Periodic connected-library sync enabled (daily)');
+  return timer;
+}
+
 async function _seedRerankerBackground(tracks) {
-  const { isRerankerEnabled, isSubprocessRunning, seedLibrary } = await import('../src/reranker.js');
+  const { isRerankerEnabled, isSubprocessRunning, seedLibrary, refreshPreferenceReference } = await import('../src/reranker.js');
   if (!isRerankerEnabled() || !isSubprocessRunning()) return;
 
   const { fetchLyricsBatch } = await import('./lyrics.js');
@@ -125,6 +144,12 @@ async function _seedRerankerBackground(tracks) {
       console.warn('[Sync] Discovery seed failed:', err.message);
     }
   }
+
+  // Seeding changes the candidate universe; refresh the cached picks so the
+  // next Tune In session sees newly synced tracks immediately.
+  await refreshPreferenceReference().catch(err =>
+    console.warn('[Sync] Preference reference refresh failed:', err.message)
+  );
 }
 
 async function syncService(service, results) {

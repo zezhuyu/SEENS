@@ -9,9 +9,11 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const CODEX_BIN   = process.env.CODEX_BIN   ?? 'codex';
-// Default to a cheaper local Codex CLI model for this app.
-// Override via CODEX_MODEL env var if you need a different Codex-capable model.
-const CODEX_MODEL = process.env.CODEX_MODEL ?? 'gpt-5.4-mini';
+// No default model: 'gpt-5.4-mini' (the old default here) returns HTTP 400
+// "not supported when using Codex with a ChatGPT account" on this login, so
+// omitting -m and letting the Codex CLI use its own configured default is
+// what actually works. Override via CODEX_MODEL env var if needed.
+const CODEX_MODEL = process.env.CODEX_MODEL ?? '';
 
 const JSON_INSTRUCTION = `
 Respond ONLY with a single JSON object (no markdown, no extra text) with these fields:
@@ -39,7 +41,11 @@ export async function generate(systemPrompt, userMessage) {
     'exec', fullPrompt,
     '--output-last-message', outPath,
     '--ephemeral',
-    '--full-auto',
+    // `--full-auto` was removed from the Codex CLI; `--approve-for-me`
+    // is the closest current equivalent (routes approvals through
+    // automatic review under the workspace-write sandbox, so it already
+    // implies that sandbox and cannot be combined with an explicit -s).
+    '--approve-for-me',
     ...(CODEX_MODEL ? ['-m', CODEX_MODEL] : []),
   ];
 

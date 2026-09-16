@@ -15,6 +15,15 @@ export function register(ws, clientId = null) {
   clients.add(ws);
   if (normalizedClientId) {
     const sockets = clientsById.get(normalizedClientId) ?? new Set();
+    // A renderer reconnect can briefly overlap its previous socket. Keep one
+    // delivery target per client ID; sending to every stale socket duplicates
+    // DJ messages and causes the same TTS intro to be queued repeatedly.
+    for (const previous of sockets) {
+      if (previous === ws) continue;
+      clients.delete(previous);
+      previous.close?.(4001, 'superseded-by-new-connection');
+    }
+    sockets.clear();
     sockets.add(ws);
     clientsById.set(normalizedClientId, sockets);
 

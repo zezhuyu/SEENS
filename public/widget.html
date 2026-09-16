@@ -869,7 +869,11 @@ function SettingsPanel({ open, onClose, restIntervalMin, setRestIntervalMin, res
 
   const clearQueue = async () => {
     setClearing(true);
-    await fetch('/api/settings/queue/clear', { method:'POST' }).catch(() => {});
+    await fetch('/api/settings/queue/clear', {
+      method:'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    }).catch(() => {});
     setClearing(false);
   };
 
@@ -1732,6 +1736,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
   const [sessionSecs, setSessionSecs]   = useState(0);
   const [weather, setWeather]           = useState(null); // { icon, tempC }
   const [sessionStart, setSessionStart] = useState(null);
+  const startInFlightRef = useRef(false);
   const [playing, setPlaying]           = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [upNextTrack, setUpNextTrack]   = useState(null);
@@ -1784,6 +1789,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
   const userChatPendingRef   = useRef(false); // blocks scheduler from stealing cold-start slot
   const skipAfterTTSRef      = useRef(false);
   const pendingIntroTTSRef   = useRef(null);
+  const pendingIntroTrackRef = useRef(null);
   const introFiredRef        = useRef(false);
   const transitionReqRef     = useRef(false);
   const waitForInteractRef   = useRef(false);
@@ -1800,6 +1806,31 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
   const [pluginsVersion,   setPluginsVersion]   = useState(0);   // bumped when plugins.json changes on disk
 
   const categoryFilterRef = useRef(categoryFilter);
+
+  const trackKey = (track) => {
+    if (!track) return null;
+    const videoId = track.videoId ?? track.video_id;
+    const titleKey = `title:${String(track.resolvedTitle ?? track.resolved_title ?? track.title ?? '').trim().toLowerCase()}::artist:${String(track.resolvedArtist ?? track.resolved_artist ?? track.artist ?? '').trim().toLowerCase()}`;
+    return videoId ? `video:${videoId}::${titleKey}` : titleKey;
+  };
+
+  const transitionStillTargetsNext = async (target) => {
+    if (!target) return true;
+    try {
+      const response = await fetch('/api/now?full=1');
+      const body = await response.json();
+      const next = body?.queue?.[0];
+      const nextKey = trackKey(next);
+      const targetKey = trackKey(target);
+      const matches = Boolean(next && nextKey && targetKey && (nextKey === targetKey ||
+        (!next.videoId && !next.video_id) && nextKey === targetKey.replace(/^video:[^:]+::/, '')));
+      if (!matches) console.warn('[Transition] discarded stale intro', { target, next });
+      return matches;
+    } catch (error) {
+      console.warn('[Transition] could not verify target track; discarding intro', error);
+      return false;
+    }
+  };
 
   // keep refs in sync with state/props
   useEffect(() => { playingRef.current = playing; }, [playing]);
@@ -2322,6 +2353,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
     introFiredRef.current = false;
     transitionReqRef.current = false;
     pendingIntroTTSRef.current = null;
+    pendingIntroTrackRef.current = null;
     coldStartTrackRef.current = null;
     skipAfterTTSRef.current = false;
     // Immediately shift queue display so current track moves to position 1
@@ -2416,6 +2448,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
       // Trigger transition generation at ~30s remaining
       if (!transitionReqRef.current && !pendingIntroTTSRef.current && remaining <= 30 && dur > 40) {
         transitionReqRef.current = true;
+        console.log(`[Transition] requesting intro; remaining=${remaining.toFixed(1)}s clientId=${clientIdRef.current}`);
         fetch('/api/transition', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2426,8 +2459,17 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
       if (!introFiredRef.current && pendingIntroTTSRef.current && remaining <= 8 && dur > 15) {
         introFiredRef.current = true;
         const url = pendingIntroTTSRef.current;
+        const target = pendingIntroTrackRef.current;
         pendingIntroTTSRef.current = null;
-        enqueueTTS(url);
+        pendingIntroTrackRef.current = null;
+        console.log(`[Transition] verifying intro target at remaining=${remaining.toFixed(1)}s`);
+        transitionStillTargetsNext(target).then(matches => {
+          if (matches) enqueueTTS(url);
+          else {
+            transitionReqRef.current = false;
+            introFiredRef.current = false;
+          }
+        });
       }
     };
     audio.addEventListener('play',       onPlay);
@@ -2474,13 +2516,14 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
       // Real response arriving — clear the plugin-loading placeholder if it's still set
       if (!msg.interim && pendingIntroTTSRef.current === 'plugin-loading') {
         pendingIntroTTSRef.current = null;
+        pendingIntroTrackRef.current = null;
       }
 
       // Update queue display only after intent is known:
       // - intent=now: replace entire queue, first track is the new "now playing"
       // - intent=next/end: fetch fresh queue from server so we don't falsely mark a queued
       //   track as "now" while the current song is still playing
-      if (msg.play?.length) {
+      if (msg.play?.length && (userAsked || !audioActive)) {
         if (intent === 'now') {
           setQueue(msg.play.map((t, i) => ({
             title: t.resolvedTitle ?? t.title,
@@ -2501,12 +2544,26 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
       if (audioActive && !userAsked) {
         if (msg.ttsUrl) {
           pendingIntroTTSRef.current = msg.ttsUrl;
+          pendingIntroTrackRef.current = msg.transitionFor ?? null;
           transitionReqRef.current = true;
         } else if (msg.trigger === 'auto-refill' && msg.play?.length > 0) {
           // Auto-refill added new tracks silently (no TTS generated server-side).
           // Reset so the onTimeUpdate transition check can fire for the first new track
           // and generate a proper intro when the current song is nearly done.
           transitionReqRef.current = false;
+        }
+      } else if (!userAsked) {
+        // Background responses only add tracks to the server queue. During the
+        // short gap between audio elements, never treat them as cold starts.
+        // The normal onEnded/skipNext path owns playback progression.
+        if (msg.trigger === 'transition' && msg.ttsUrl) {
+          console.log('[handleDJResponse] verifying late transition intro target');
+          transitionStillTargetsNext(msg.transitionFor ?? null).then(matches => {
+            if (matches) enqueueTTS(msg.ttsUrl);
+            else console.warn('[Transition] discarded late stale intro');
+          });
+        } else {
+          console.log(`[handleDJResponse] ignored background playback start (trigger=${msg.trigger})`);
         }
       } else if (audioActive && userAsked) {
         if (intent === 'now') {
@@ -2520,7 +2577,11 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
             if (msg.ttsUrl) enqueueTTS(msg.ttsUrl);
           }
         } else if (intent === 'next') {
-          if (msg.ttsUrl) { pendingIntroTTSRef.current = msg.ttsUrl; transitionReqRef.current = true; }
+          if (msg.ttsUrl) {
+            pendingIntroTTSRef.current = msg.ttsUrl;
+            pendingIntroTrackRef.current = msg.firstTrack ?? msg.play?.[0] ?? null;
+            transitionReqRef.current = true;
+          }
           const nt = msg.firstTrack ?? msg.play?.[0];
           if (nt) setUpNextTrack({ title: nt.resolvedTitle??nt.title, artist: nt.resolvedArtist??nt.artist??'' });
         } else if (intent === 'end' && msg.ttsUrl && !msg.firstTrack) {
@@ -2599,6 +2660,29 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
         else if (msg.type === 'session-context') {
           setSessionCtx(msg.context ?? '');
         }
+        else if (msg.type === 'session-started') {
+          // Mirrors what the local startRadio() sets before its own fetch
+          // calls, for a session started remotely (StopWatch/bridge) instead
+          // of by clicking Tune In in this window. The remote caller already
+          // made the queue/clear + session/start + chat calls; this just
+          // unlocks the UI/audio gates so the resulting dj-response and
+          // now-playing broadcasts are not dropped by the startedRef guard.
+          setOverlayLabel('Tuning in…');
+          startedRef.current = true;
+          setStarted(true);
+          setSessionStart(Date.now());
+          userChatPendingRef.current = true;
+          waitForInteractRef.current = false;
+        }
+        else if (msg.type === 'session-ended') {
+          exitSession();
+        }
+        else if (msg.type === 'user-message') {
+          // Broadcast by the server for chat messages that did not originate
+          // from this widget's own sendChat() (e.g. a voice message spoken
+          // to the DJ from the watch), so it still appears in the log here.
+          setDjMessages(prev => [...prev, { from: 'user', text: msg.text, time: fmtClock(new Date()) }]);
+        }
       };
       ws.onclose = () => {
         setConnected(false);
@@ -2611,6 +2695,12 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
 
   // ── start radio
   const startRadio = async () => {
+    if (startInFlightRef.current || startedRef.current || playingRef.current) {
+      console.warn(`[startRadio] duplicate Tune In ignored; inFlight=${startInFlightRef.current} started=${startedRef.current} playing=${playingRef.current}`);
+      return;
+    }
+    startInFlightRef.current = true;
+    console.log(`[startRadio] Tune In accepted; clientId=${clientIdRef.current}`);
     setOverlayLabel('Tuning in…');
     startedRef.current = true;
     setStarted(true);
@@ -2621,10 +2711,14 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
     activeRequestIdRef.current = requestId;
 
     try {
-      await fetch('/api/settings/queue/clear', { method: 'POST' });
-      const sessionStartRes = await fetch('/api/settings/session/start', { method: 'POST' });
+      const sessionStartRes = await fetch('/api/settings/session/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: clientIdRef.current, requestId }),
+      });
       if (sessionStartRes.ok) {
         const sessionStartData = await sessionStartRes.json().catch(() => null);
+        console.log(`[startRadio] session/start response alreadyActive=${!!sessionStartData?.alreadyActive}`);
         if (sessionStartData?.mood) setSessionMood(sessionStartData.mood);
       }
       // Retry up to 3 times if the server is busy with another AI call
@@ -2636,6 +2730,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
             message: 'Start my listening session. Tell me what you have planned and introduce the first track.',
             clientId: clientIdRef.current,
             requestId,
+            internal: true,
           }),
         });
         if (chatRes.status === 503) {
@@ -2657,6 +2752,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
       }
       // On success, WS dj-response will dismiss overlay and start playback
     } catch (err) { console.error('[startRadio] fetch failed:', err); userChatPendingRef.current = false; skipNextRef.current(); }
+    finally { startInFlightRef.current = false; }
   };
 
   // ── DJ chat send
@@ -2790,6 +2886,7 @@ function SeensWidget({ size, setSize, dark, setDark, themeMode, setThemeMode, ac
     ttsQueueRef.current        = [];
     ttsPlayingRef.current      = false;
     pendingIntroTTSRef.current = null;
+    pendingIntroTrackRef.current = null;
     coldStartTrackRef.current  = null;
     skipAfterTTSRef.current    = false;
     introFiredRef.current      = false;

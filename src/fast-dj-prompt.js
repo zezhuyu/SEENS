@@ -87,6 +87,6 @@ export function buildCachedRerankerSessionResponse(referenceTracks, blockedTrack
 }
 
 export function buildCachedRerankerSessionWithFallback(referenceTracks, blockedTracks = [], limit = 5) {
-  return buildCachedRerankerSessionResponse(referenceTracks, blockedTracks, limit)
-    ?? buildCachedRerankerSessionResponse(referenceTracks, [], limit);
+  // Never bypass repeat protection just because the cache is mostly blocked.
+  return buildCachedRerankerSessionResponse(referenceTracks, blockedTracks, limit);
 }

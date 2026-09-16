@@ -69,8 +69,7 @@ test('cached reranker refill does not fall back to AI when freshness blocks ever
     { title: 'Third', artist: 'C' },
   ];
   const response = buildCachedRerankerSessionWithFallback(tracks, tracks);
-  assert.deepEqual(response.play, tracks);
-  assert.match(response.reason, /reranker/i);
+  assert.equal(response, null);
 });
 
 test('progressive resolution exposes the first playable track before the rest', async () => {
