@@ -58,6 +58,14 @@ Set `AI_AGENT=claude` or `AI_AGENT=codex` in `.env` to pick which one runs at st
 
 ## Installation
 
+Download the latest macOS app from the [Seens Radio releases page](https://github.com/zezhuyu/SEENS/releases/tag/latest), then install **Seens Radio.app** in `/Applications`. After installing, remove macOS quarantine from the app:
+
+```bash
+sudo xattr -rd com.apple.quarantine "/Applications/Seens Radio.app"
+```
+
+You can also install from source:
+
 ```bash
 git clone <repo-url>
 cd SEENS
